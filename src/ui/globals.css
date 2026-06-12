@@ -1,0 +1,44 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Default token values — apps override these in their root layout for hub-specific theming. */
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --surface: 0 0% 100%;
+    --border: 220 13% 91%;
+    --primary: 168 100% 39%;
+    --primary-fg: 0 0% 100%;
+    --accent: 38 92% 50%;
+    --foreground: 215 16% 47%;
+    --muted: 215 16% 47%;
+    --destructive: 0 84% 60%;
+    --radius: 8px;
+    --font-sans: 'Inter', system-ui, sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+  }
+
+  body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-family: var(--font-sans);
+  }
+
+  /* Real visual hierarchy so pages don't all hand-roll text-2xl font-bold.
+     Use the @apply soup so per-hub tailwind can still override via class. */
+  h1 {
+    @apply text-[2rem] leading-[2.5rem] font-semibold tracking-tight text-foreground;
+  }
+  h2 {
+    @apply text-2xl leading-8 font-semibold text-foreground;
+  }
+  h3 {
+    @apply text-lg leading-7 font-medium text-foreground;
+  }
+
+  *:focus-visible {
+    outline: 2px solid hsl(var(--primary));
+    outline-offset: 2px;
+  }
+}

@@ -1,0 +1,82 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Equity Screener Hub theming — slate-indigo brand on a cool off-white
+   canvas, same family as the other hubs. Finance UX rule: green=up /
+   red=down are DATA colors, so the brand is deliberately neutral and the
+   --pos / --neg tokens are reserved for signal chips + chart deltas only. */
+@layer base {
+  :root {
+    --radius: 12px;
+
+    --background: 220 33% 99%;   /* #FAFBFD */
+    --surface: 0 0% 100%;        /* #FFFFFF */
+    --border: 220 13% 91%;       /* #E5E7EB */
+
+    --primary: 244 76% 59%;      /* #4F46E5 — slate-indigo, brand only */
+    --primary-fg: 0 0% 100%;
+
+    --accent: 38 92% 50%;        /* #F59E0B — amber, AI affordances */
+
+    --foreground: 220 39% 11%;   /* #111827 */
+    --muted: 217 9% 46%;         /* #6B7280 */
+
+    --destructive: 0 72% 45%;
+
+    /* Directional data tokens — used ONLY for signal chips + chart deltas. */
+    --pos: 160 84% 31%;          /* #059669 — emerald-600 */
+    --neg: 347 77% 50%;          /* #E11D48 — rose-600 */
+
+    --font-sans: var(--font-inter), system-ui, sans-serif;
+    --font-mono: var(--font-jetbrains-mono), monospace;
+  }
+
+  :root.dark {
+    --background: 220 14% 8%;    /* #11141A */
+    --surface: 220 14% 12%;      /* #1A1E26 */
+    --border: 220 13% 22%;       /* #2F3540 */
+
+    --primary: 244 76% 68%;
+    --primary-fg: 0 0% 100%;
+
+    --accent: 38 92% 55%;
+
+    --foreground: 220 14% 95%;   /* #EEF0F4 */
+    --muted: 217 10% 64%;
+
+    --destructive: 0 78% 65%;
+
+    --pos: 160 70% 45%;          /* lifted emerald for dark bg */
+    --neg: 347 85% 62%;          /* lifted rose for dark bg */
+  }
+
+  html {
+    font-size: 16px;
+  }
+
+  body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  *:focus-visible {
+    outline: 2px solid hsl(var(--primary));
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background-color: hsl(var(--primary) / 0.2);
+  }
+}
+
+/* Directional helpers backed by the data tokens above. */
+@layer utilities {
+  .text-pos { color: hsl(var(--pos)); }
+  .text-neg { color: hsl(var(--neg)); }
+  .bg-pos-soft { background-color: hsl(var(--pos) / 0.12); color: hsl(var(--pos)); }
+  .bg-neg-soft { background-color: hsl(var(--neg) / 0.12); color: hsl(var(--neg)); }
+}
