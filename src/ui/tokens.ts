@@ -43,7 +43,7 @@ export const tokens = {
   // so the brand/primary is a neutral slate-indigo (never directional) and the
   // pos/neg tokens are reserved exclusively for signal chips + chart deltas.
   screener: {
-    primary: '#4F46E5',     // slate-indigo — brand chrome only
+    primary: '#2563EB',     // blue-600 — brand chrome only
     primaryFg: '#ffffff',
     accent: '#F59E0B',      // amber — AI affordances (consistent across hubs)
     pos: '#059669',         // emerald-600 — up / pass / accelerating ONLY

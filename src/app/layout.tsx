@@ -13,17 +13,17 @@ const jetbrainsMono = JetBrains_Mono({
 
 export const metadata: Metadata = {
   title: {
-    default: 'Equity Screener',
-    template: '%s · Equity Screener',
+    default: 'TripleQ Group',
+    template: '%s · TripleQ Group',
   },
   description: 'Fundamental EPS screener — track YoY growth, QoQ trend, and forward signals per ticker.',
-  applicationName: 'Equity Screener',
-  appleWebApp: { capable: true, statusBarStyle: 'default', title: 'Equity Screener' },
+  applicationName: 'TripleQ Group',
+  appleWebApp: { capable: true, statusBarStyle: 'default', title: 'TripleQ Group' },
   formatDetection: { telephone: false },
 }
 
 export const viewport: Viewport = {
-  themeColor: '#4F46E5',
+  themeColor: '#2563EB',
   width: 'device-width',
   initialScale: 1,
   maximumScale: 1,

@@ -18,7 +18,7 @@ export function ScreenerSidebar() {
     <div className="flex h-full flex-col">
       <SidebarBrand>
         <LineChart className="h-5 w-5 text-primary" />
-        <span>Equity Screener</span>
+        <span>TripleQ Group</span>
       </SidebarBrand>
       <SidebarNav>
         {NAV.map((item) => (

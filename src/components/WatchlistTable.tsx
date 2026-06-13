@@ -30,7 +30,7 @@ type SortKey = 'symbol' | 'yoyPct' | 'passing'
 
 export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
   const router = useRouter()
-  const [sortKey, setSortKey] = useState<SortKey>('yoyPct')
+  const [sortKey, setSortKey] = useState<SortKey>('passing')
   const [dir, setDir] = useState<'asc' | 'desc'>('desc')
 
   function toggle(key: SortKey) {
@@ -46,7 +46,9 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
     if (sortKey === 'symbol') cmp = a.symbol.localeCompare(b.symbol)
     else if (sortKey === 'yoyPct') cmp = (a.yoyPct ?? -Infinity) - (b.yoyPct ?? -Infinity)
     else cmp = a.passing - b.passing
-    return dir === 'asc' ? cmp : -cmp
+    const ordered = dir === 'asc' ? cmp : -cmp
+    // Stable tiebreak so equal scores (e.g. all the 4/5s) stay alphabetical.
+    return ordered !== 0 ? ordered : a.symbol.localeCompare(b.symbol)
   })
 
   const SortHeader = ({ label, k, className }: { label: string; k: SortKey; className?: string }) => (
