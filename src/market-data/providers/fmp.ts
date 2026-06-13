@@ -8,17 +8,26 @@ import { ProviderError } from '../provider'
 
 // Financial Modeling Prep (https://financialmodelingprep.com) adapter.
 //
-// Endpoints used (stable v3 REST):
-//   /profile/{sym}                            → name, currency
-//   /historical/earning_calendar/{sym}        → reported + estimated EPS/rev
-//   /ratios-ttm/{sym} + /quote/{sym}          → trailing/forward P/E, margins
-//   /income-statement/{sym}?period=annual     → 5-yr revenue / net income
+// Uses FMP's current "stable" API. The old `/api/v3/*` REST routes were
+// deprecated on 2025-08-31 — keys issued after that date get a
+// "Legacy Endpoint" error — so every call here targets `/stable/*`, which
+// takes the symbol as a `?symbol=` query param (not a path segment) and
+// returns renamed fields vs the legacy schema.
+//
+// Endpoints used:
+//   /profile?symbol=            → name, currency
+//   /earnings?symbol=           → reported + estimated EPS/rev per quarter
+//   /quote?symbol=              → price, market cap
+//   /ratios-ttm?symbol=         → trailing P/E, margins
+//   /key-metrics-ttm?symbol=    → ROIC TTM
+//   /analyst-estimates?symbol=&period=annual → forward EPS → forward P/E
+//   /income-statement?symbol=&period=annual  → 5-yr revenue / net income
 //
 // FMP returns split-adjusted historical EPS, so step-3/4 ratios are valid
 // without renormalizing. All values are passed through as-is; the calc engine
 // (src/lib/signals.ts in the app) owns every formula and edge case.
 
-const BASE = 'https://financialmodelingprep.com/api/v3'
+const BASE = 'https://financialmodelingprep.com/stable'
 
 function apiKey(): string {
   const key = process.env.MARKET_DATA_FMP_API_KEY
@@ -34,18 +43,30 @@ function apiKey(): string {
 async function get<T>(symbol: string, path: string, params: Record<string, string> = {}): Promise<T> {
   const url = new URL(`${BASE}${path}`)
   url.searchParams.set('apikey', apiKey())
+  url.searchParams.set('symbol', symbol)
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v)
 
   const res = await fetch(url, { headers: { accept: 'application/json' } })
   if (!res.ok) {
     throw new ProviderError(`FMP ${path} → ${res.status}`, symbol, res.status)
   }
-  return (await res.json()) as T
+  const json = await res.json()
+  // FMP signals quota / plan / legacy errors as a 200 with an object carrying
+  // an "Error Message" instead of the expected array — surface it as a
+  // ProviderError so ingest labels the snapshot instead of crashing on shape.
+  if (json && !Array.isArray(json) && typeof json === 'object' && 'Error Message' in json) {
+    throw new ProviderError(`FMP ${path}: ${(json as { 'Error Message': string })['Error Message']}`, symbol)
+  }
+  return json as T
 }
 
 function toNum(v: unknown): number | null {
   const n = typeof v === 'string' ? Number(v) : (v as number)
   return typeof n === 'number' && Number.isFinite(n) ? n : null
+}
+
+function today(): string {
+  return new Date().toISOString().slice(0, 10)
 }
 
 /** FMP dates are 'YYYY-MM-DD'. Derive a calendar-ish 'YYYYQn' label from the
@@ -59,9 +80,9 @@ function fiscalPeriodFromDate(date: string): string {
 
 interface FmpEarning {
   date: string
-  eps: number | null
+  epsActual: number | null
   epsEstimated: number | null
-  revenue: number | null
+  revenueActual: number | null
   revenueEstimated: number | null
 }
 
@@ -71,29 +92,35 @@ interface FmpProfile {
 }
 
 interface FmpRatiosTtm {
-  priceEarningsRatioTTM?: number
+  priceToEarningsRatioTTM?: number
   netProfitMarginTTM?: number
   grossProfitMarginTTM?: number
   operatingProfitMarginTTM?: number
-  returnOnInvestmentTTM?: number
+}
+
+interface FmpKeyMetricsTtm {
+  returnOnInvestedCapitalTTM?: number
 }
 
 interface FmpQuote {
   price?: number
-  pe?: number
-  eps?: number // TTM EPS — used to derive forward P/E from forward EPS estimate
   marketCap?: number
 }
 
+interface FmpAnnualEstimate {
+  date: string // fiscal-year end 'YYYY-MM-DD'
+  epsAvg?: number // consensus EPS estimate for that fiscal year
+}
+
 interface FmpIncome {
-  calendarYear?: string
+  fiscalYear?: string
   revenue?: number
   netIncome?: number
 }
 
 export class FmpProvider implements DataProvider {
   async getProfile(symbol: string) {
-    const rows = await get<FmpProfile[]>(symbol, `/profile/${symbol}`)
+    const rows = await get<FmpProfile[]>(symbol, '/profile')
     const p = rows[0]
     return { name: p?.companyName ?? null, currency: p?.currency ?? null }
   }
@@ -101,19 +128,19 @@ export class FmpProvider implements DataProvider {
   async getQuarterlyEps(symbol: string, quarters: number): Promise<EpsRow[]> {
     // Pull a generous window so we keep `quarters` actuals AND the forward
     // estimate rows FMP returns ahead of `date = today`.
-    const rows = await get<FmpEarning[]>(symbol, `/historical/earning_calendar/${symbol}`, {
+    const rows = await get<FmpEarning[]>(symbol, '/earnings', {
       limit: String(quarters + 8),
     })
-    const today = new Date().toISOString().slice(0, 10)
+    const t = today()
 
     const mapped = rows.map<EpsRow>((r) => {
-      const isForecast = r.eps == null || r.date > today
+      const isForecast = r.epsActual == null || r.date > t
       return {
         fiscalPeriod: fiscalPeriodFromDate(r.date),
         periodEnd: r.date,
-        epsActual: isForecast ? null : toNum(r.eps),
+        epsActual: isForecast ? null : toNum(r.epsActual),
         epsEstimate: toNum(r.epsEstimated),
-        revenueActual: isForecast ? null : toNum(r.revenue),
+        revenueActual: isForecast ? null : toNum(r.revenueActual),
         revenueEstimate: toNum(r.revenueEstimated),
         isForecast,
       }
@@ -129,40 +156,52 @@ export class FmpProvider implements DataProvider {
   }
 
   async getValuation(symbol: string): Promise<ValuationSnapshot> {
-    const [ratios, quotes] = await Promise.all([
-      get<FmpRatiosTtm[]>(symbol, `/ratios-ttm/${symbol}`),
-      get<FmpQuote[]>(symbol, `/quote/${symbol}`),
+    const [ratios, metrics, quotes, estimates] = await Promise.all([
+      get<FmpRatiosTtm[]>(symbol, '/ratios-ttm'),
+      get<FmpKeyMetricsTtm[]>(symbol, '/key-metrics-ttm'),
+      get<FmpQuote[]>(symbol, '/quote'),
+      get<FmpAnnualEstimate[]>(symbol, '/analyst-estimates', { period: 'annual', limit: '10' }),
     ])
     const r = ratios[0] ?? {}
+    const km = metrics[0] ?? {}
     const q = quotes[0] ?? {}
 
-    const trailingPe = toNum(q.pe) ?? toNum(r.priceEarningsRatioTTM)
-    // Forward P/E: FMP's free tier doesn't expose it directly. Derive it from
-    // price ÷ forward-EPS when the quote carries a forward estimate; otherwise
-    // leave null and let step 5 degrade to n/a (handled in the calc engine).
-    const forwardPe = null
+    const price = toNum(q.price)
+    const trailingPe = toNum(r.priceToEarningsRatioTTM)
+
+    // Forward P/E: derive it from price ÷ next fiscal-year consensus EPS. The
+    // stable quote no longer carries `pe`/`eps`, so we pull the nearest future
+    // annual estimate (smallest period-end date past today). If there's no
+    // usable estimate, leave null and step 5 degrades to n/a (calc engine).
+    const t = today()
+    const nextEstimate = estimates
+      .filter((e) => e.date > t && (toNum(e.epsAvg) ?? 0) > 0)
+      .sort((a, b) => a.date.localeCompare(b.date))[0]
+    const forwardEps = nextEstimate ? toNum(nextEstimate.epsAvg) : null
+    const forwardPe =
+      price !== null && price > 0 && forwardEps !== null && forwardEps > 0 ? price / forwardEps : null
 
     return {
-      asOf: new Date().toISOString().slice(0, 10),
-      price: toNum(q.price),
+      asOf: t,
+      price,
       trailingPe,
       forwardPe,
       netMarginTtm: toNum(r.netProfitMarginTTM),
       grossMarginTtm: toNum(r.grossProfitMarginTTM),
       operatingMarginTtm: toNum(r.operatingProfitMarginTTM),
-      roiTtm: toNum(r.returnOnInvestmentTTM),
+      roiTtm: toNum(km.returnOnInvestedCapitalTTM),
       marketCap: toNum(q.marketCap),
     }
   }
 
   async getAnnualFinancials(symbol: string, years: number): Promise<AnnualRow[]> {
-    const rows = await get<FmpIncome[]>(symbol, `/income-statement/${symbol}`, {
+    const rows = await get<FmpIncome[]>(symbol, '/income-statement', {
       period: 'annual',
       limit: String(years),
     })
     return rows
       .map<AnnualRow>((r) => ({
-        fiscalYear: Number(r.calendarYear) || 0,
+        fiscalYear: Number(r.fiscalYear) || 0,
         revenue: toNum(r.revenue),
         netIncome: toNum(r.netIncome),
       }))
