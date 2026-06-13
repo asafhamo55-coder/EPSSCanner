@@ -113,6 +113,20 @@ export async function ingestTicker(symbol: string): Promise<IngestResult> {
     if (error) throw new Error(`Failed to upsert annuals for ${sym}: ${error.message}`)
   }
 
+  // Purge any rows left behind by a previous provider. Mock and FMP derive
+  // different fiscal_period / fiscal_year keys, so switching a ticker from the
+  // demo provider to live FMP would otherwise orphan stale synthetic rows that
+  // upsert never overwrites. Deleting everything not from the current source
+  // guarantees a ticker's data is single-source (all real once on FMP).
+  for (const table of [
+    'screener_quarterly_eps',
+    'screener_valuation_snapshots',
+    'screener_annual_financials',
+  ]) {
+    const { error } = await supabase.from(table).delete().eq('ticker_id', tickerId).neq('source', source)
+    if (error) throw new Error(`Failed to purge stale ${table} for ${sym}: ${error.message}`)
+  }
+
   return { symbol: sym, tickerId, quarters: eps.length, annualYears: annual.length, asOf: val.asOf }
 }
 
