@@ -12,11 +12,13 @@ function StepCard({
   title,
   chip,
   children,
+  footer,
 }: {
   step: number
   title: string
   chip: React.ReactNode
   children: React.ReactNode
+  footer?: React.ReactNode
 }) {
   return (
     <Card>
@@ -29,6 +31,7 @@ function StepCard({
       </CardHeader>
       <CardContent>
         <KeyValueList>{children}</KeyValueList>
+        {footer}
       </CardContent>
     </Card>
   )
@@ -37,6 +40,59 @@ function StepCard({
 function bool(v: boolean | null): string {
   if (v == null) return '—'
   return v ? 'Yes' : 'No'
+}
+
+function billions(v: number | null): string {
+  if (v == null) return '—'
+  return (v / 1e9).toFixed(1)
+}
+
+// The actual per-year revenue & net-income numbers behind the step-2 verdict,
+// coloured green/red by year-over-year direction so the "rising" call is visible.
+function AnnualMiniTable({
+  annual,
+}: {
+  annual: { fiscalYear: number; revenue: number | null; netIncome: number | null }[]
+}) {
+  if (!annual.length) return null
+  const rows = [
+    { label: 'Revenue', key: 'revenue' as const },
+    { label: 'Net income', key: 'netIncome' as const },
+  ]
+  return (
+    <div className="mt-3 overflow-x-auto border-t border-border pt-3">
+      <table className="w-full text-xs tabular-nums">
+        <thead>
+          <tr className="text-muted [&>th]:px-1.5 [&>th]:py-1 [&>th]:text-right">
+            <th className="text-left font-medium">$bn</th>
+            {annual.map((a) => (
+              <th key={a.fiscalYear} className="font-medium">
+                {a.fiscalYear}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.key} className="[&>td]:px-1.5 [&>td]:py-1 [&>td]:text-right">
+              <td className="text-left font-medium text-foreground">{r.label}</td>
+              {annual.map((a, i) => {
+                const v = a[r.key]
+                const prev = i > 0 ? annual[i - 1][r.key] : null
+                const cls =
+                  v != null && prev != null ? (v > prev ? 'text-pos' : v < prev ? 'text-neg' : '') : ''
+                return (
+                  <td key={a.fiscalYear} className={cls}>
+                    {billions(v)}
+                  </td>
+                )
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
 }
 
 export function Scorecard({ data }: { data: TickerData }) {
@@ -65,6 +121,7 @@ export function Scorecard({ data }: { data: TickerData }) {
         step={2}
         title="Fundamentals trend (5 yr)"
         chip={<SignalChip state={sc.fundamentals.state} />}
+        footer={<AnnualMiniTable annual={data.annual} />}
       >
         <KeyValue label="Revenue rising" value={bool(sc.fundamentals.revenueGrowing)} />
         <KeyValue label="Net income rising" value={bool(sc.fundamentals.netIncomeGrowing)} />

@@ -4,30 +4,64 @@ import { useMemo } from 'react'
 import ReactECharts from 'echarts-for-react'
 import { tokens } from '@/ui'
 
-// Quarterly EPS trend: solid line for reported actuals, dashed continuation
-// for forecast quarters. The two series share an x-axis; the forecast series
-// is null for historical points so the dash picks up exactly where actuals end.
-export interface EpsTrendPoint {
+// Quarterly EPS trend: solid line for reported actuals, dashed continuation for
+// the next-4-quarters forecast. Forecast points are filled when they come from
+// analyst consensus and hollow when they're the seasonal growth model.
+export interface EpsTrendActual {
   fiscalPeriod: string
   epsActual: number | null
-  epsEstimate: number | null
-  isForecast: boolean
 }
 
-export function EpsTrendChart({ points }: { points: EpsTrendPoint[] }) {
-  const option = useMemo(() => {
-    const labels = points.map((p) => p.fiscalPeriod)
-    const actual = points.map((p) => (p.isForecast ? null : p.epsActual))
+export interface EpsTrendForecast {
+  fiscalPeriod: string
+  eps: number
+  source: 'consensus' | 'model'
+}
 
-    // Forecast line: connect from the last actual through the estimate points.
-    const lastActualIdx = points.reduce((acc, p, i) => (p.isForecast ? acc : i), -1)
-    const forecast = points.map((p, i) => {
-      if (i === lastActualIdx) return p.epsActual
-      return p.isForecast ? p.epsEstimate : null
+export function EpsTrendChart({
+  actuals,
+  prediction,
+}: {
+  actuals: EpsTrendActual[]
+  prediction: EpsTrendForecast[]
+}) {
+  const option = useMemo(() => {
+    const labels = [...actuals.map((a) => a.fiscalPeriod), ...prediction.map((p) => p.fiscalPeriod)]
+    const lastActualIdx = actuals.length - 1
+    const lastActual = lastActualIdx >= 0 ? actuals[lastActualIdx].epsActual : null
+
+    const actualData: (number | null)[] = [
+      ...actuals.map((a) => a.epsActual),
+      ...prediction.map(() => null),
+    ]
+
+    // Forecast series: null over history, anchored to the last actual so the
+    // dashed line continues seamlessly, then the predicted points.
+    const forecastData = labels.map((_, i) => {
+      if (i === lastActualIdx) return lastActual
+      const pi = i - actuals.length
+      if (pi < 0) return null
+      const p = prediction[pi]
+      const filled = p.source === 'consensus'
+      return {
+        value: p.eps,
+        symbol: 'circle',
+        symbolSize: 7,
+        itemStyle: filled
+          ? { color: tokens.screener.accent }
+          : { color: tokens.screener.surface, borderColor: tokens.screener.accent, borderWidth: 2 },
+      }
     })
 
     return {
-      grid: { top: 16, right: 16, bottom: 28, left: 40, containLabel: false },
+      grid: { top: 30, right: 16, bottom: 28, left: 40, containLabel: false },
+      legend: {
+        top: 0,
+        right: 0,
+        itemWidth: 18,
+        textStyle: { fontSize: 11, color: tokens.screener.muted },
+        data: ['EPS (actual)', 'Forecast (next 4Q)'],
+      },
       tooltip: {
         trigger: 'axis',
         valueFormatter: (v: number | null) => (v == null ? '—' : v.toFixed(2)),
@@ -49,7 +83,7 @@ export function EpsTrendChart({ points }: { points: EpsTrendPoint[] }) {
         {
           name: 'EPS (actual)',
           type: 'line',
-          data: actual,
+          data: actualData,
           smooth: true,
           symbol: 'circle',
           symbolSize: 6,
@@ -58,19 +92,17 @@ export function EpsTrendChart({ points }: { points: EpsTrendPoint[] }) {
           connectNulls: false,
         },
         {
-          name: 'EPS (estimate)',
+          name: 'Forecast (next 4Q)',
           type: 'line',
-          data: forecast,
+          data: forecastData,
           smooth: true,
-          symbol: 'emptyCircle',
-          symbolSize: 6,
           lineStyle: { width: 2, type: 'dashed', color: tokens.screener.accent },
           itemStyle: { color: tokens.screener.accent },
           connectNulls: true,
         },
       ],
     }
-  }, [points])
+  }, [actuals, prediction])
 
   return <ReactECharts option={option} style={{ height: 280 }} notMerge lazyUpdate />
 }

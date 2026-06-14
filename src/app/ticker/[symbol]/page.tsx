@@ -18,6 +18,7 @@ import { RemoveTickerButton } from '@/components/RemoveTickerButton'
 import { Scorecard } from '@/components/Scorecard'
 import { EpsTrendChart } from '@/components/charts/EpsTrendChart'
 import { QoqDeltaChart } from '@/components/charts/QoqDeltaChart'
+import { predictEps } from '@/lib/forecast'
 
 export const dynamic = 'force-dynamic'
 
@@ -48,12 +49,10 @@ export default async function TickerPage({
   const tab: Tab = (TABS as readonly string[]).includes(rawTab ?? '') ? (rawTab as Tab) : 'overview'
   const base = `/ticker/${sym}`
 
-  const trendPoints = data.eps.map((p) => ({
-    fiscalPeriod: p.fiscalPeriod,
-    epsActual: p.epsActual,
-    epsEstimate: p.epsEstimate,
-    isForecast: p.isForecast,
-  }))
+  const trendActuals = data.eps
+    .filter((p) => !p.isForecast)
+    .map((p) => ({ fiscalPeriod: p.fiscalPeriod, epsActual: p.epsActual }))
+  const prediction = predictEps(data.eps, 4)
 
   const actuals = data.eps.filter((p) => !p.isForecast)
   const qoqBars = actuals
@@ -103,11 +102,20 @@ export default async function TickerPage({
         <div className="grid gap-4 xl:grid-cols-2">
           <Card>
             <CardHeader>
-              <CardTitle>Quarterly EPS</CardTitle>
+              <CardTitle>Quarterly EPS · actual + next 4Q forecast</CardTitle>
             </CardHeader>
             <CardContent>
-              {trendPoints.length ? (
-                <EpsTrendChart points={trendPoints} />
+              {trendActuals.length ? (
+                <>
+                  <EpsTrendChart actuals={trendActuals} prediction={prediction} />
+                  {prediction.length ? (
+                    <p className="mt-2 text-xs text-muted">
+                      Forecast = next {prediction.length} quarters. Filled points use analyst consensus;
+                      hollow points are a seasonal growth model (same quarter a year ago × trailing YoY
+                      growth). Estimates only — not investment advice.
+                    </p>
+                  ) : null}
+                </>
               ) : (
                 <p className="text-sm text-muted">No EPS history yet.</p>
               )}
