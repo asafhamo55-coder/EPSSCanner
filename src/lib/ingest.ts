@@ -8,9 +8,15 @@ import { db } from './db'
 // earnings land. Called by /api/ingest, the server actions, and (via HTTP) the
 // Inngest weekly cron.
 
-// Mirrors getProvider(): mock only when explicitly requested, else live FMP.
+// Mirrors getProvider(): mock/yahoo/fmp when explicit, else FMP if a key is
+// configured otherwise keyless Yahoo. Kept in sync so the stale-source purge
+// labels rows with the provider that actually produced them.
 function sourceName(): string {
-  return process.env.MARKET_DATA_PROVIDER?.toLowerCase() === 'mock' ? 'mock' : 'fmp'
+  const choice = process.env.MARKET_DATA_PROVIDER?.toLowerCase()
+  if (choice === 'mock') return 'mock'
+  if (choice === 'yahoo') return 'yahoo'
+  if (choice === 'fmp') return 'fmp'
+  return process.env.MARKET_DATA_FMP_API_KEY ? 'fmp' : 'yahoo'
 }
 
 export interface IngestResult {
