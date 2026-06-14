@@ -27,7 +27,59 @@ export interface WatchlistRow {
   scored: number
 }
 
-type SortKey = 'symbol' | 'yoyPct' | 'passing'
+type SortKey = 'composite' | 'symbol' | 'yoyPct' | 'passing'
+
+function cmpNum(x: number, y: number): number {
+  return x < y ? -1 : x > y ? 1 : 0
+}
+// Forward-growth value (na sinks to the bottom).
+function fwdVal(r: WatchlistRow): number {
+  return r.fwdState !== 'na' && r.fwdPct != null ? r.fwdPct : -Infinity
+}
+// QoQ EPS (step 3) value (na sinks to the bottom).
+function qoqEpsVal(r: WatchlistRow): number {
+  return r.yoyState !== 'na' && r.yoyPct != null ? r.yoyPct : -Infinity
+}
+// Step-4 trend: accelerating > flat > n/a > decelerating.
+function accelRank(r: WatchlistRow): number {
+  switch (r.qoqState) {
+    case 'pass':
+      return 3
+    case 'flag':
+      return 2
+    case 'fail':
+      return 0
+    default:
+      return 1
+  }
+}
+// Fundamentals: pass < flag < fail (lower sorts first).
+function fundRank(r: WatchlistRow): number {
+  switch (r.fundState) {
+    case 'pass':
+      return 0
+    case 'flag':
+      return 1
+    case 'fail':
+      return 2
+    default:
+      return 3
+  }
+}
+
+// Default ordering: Score ↓, Forward(5) ↓, Accelerating first, QoQ EPS(3) ↓,
+// P/E ↑ (smallest first), then Fundamentals (pass → flag → fail).
+function compositeCompare(a: WatchlistRow, b: WatchlistRow): number {
+  return (
+    cmpNum(b.passing, a.passing) ||
+    cmpNum(fwdVal(b), fwdVal(a)) ||
+    cmpNum(accelRank(b), accelRank(a)) ||
+    cmpNum(qoqEpsVal(b), qoqEpsVal(a)) ||
+    cmpNum(a.trailingPe ?? Infinity, b.trailingPe ?? Infinity) ||
+    cmpNum(fundRank(a), fundRank(b)) ||
+    a.symbol.localeCompare(b.symbol)
+  )
+}
 
 // Signal toggle chips — each narrows the list (active toggles AND together).
 const TOGGLES: { key: string; label: string; test: (r: WatchlistRow) => boolean }[] = [
@@ -47,7 +99,7 @@ const MIN_SCORES = [
 
 export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
   const router = useRouter()
-  const [sortKey, setSortKey] = useState<SortKey>('passing')
+  const [sortKey, setSortKey] = useState<SortKey>('composite')
   const [dir, setDir] = useState<'asc' | 'desc'>('desc')
 
   const [query, setQuery] = useState('')
@@ -91,6 +143,7 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
   }, [rows, query, minScore, active])
 
   const sorted = useMemo(() => {
+    if (sortKey === 'composite') return [...filtered].sort(compositeCompare)
     return [...filtered].sort((a, b) => {
       let cmp = 0
       if (sortKey === 'symbol') cmp = a.symbol.localeCompare(b.symbol)
