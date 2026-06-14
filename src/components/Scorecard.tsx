@@ -73,7 +73,7 @@ export function Scorecard({ data }: { data: TickerData }) {
 
       <StepCard
         step={3}
-        title="YoY EPS growth"
+        title="QoQ EPS growth"
         chip={
           <SignalChip
             state={sc.yoy.state}

@@ -16,7 +16,7 @@ export const metadata: Metadata = {
     default: 'TripleQ Group',
     template: '%s · TripleQ Group',
   },
-  description: 'Fundamental EPS screener — track YoY growth, QoQ trend, and forward signals per ticker.',
+  description: 'Fundamental EPS screener — track QoQ EPS growth, sequential trend, and forward signals per ticker.',
   applicationName: 'TripleQ Group',
   appleWebApp: { capable: true, statusBarStyle: 'default', title: 'TripleQ Group' },
   formatDetection: { telephone: false },

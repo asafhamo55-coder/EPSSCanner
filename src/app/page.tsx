@@ -1,5 +1,5 @@
 import Link from 'next/link'
-import { LineChart, Plus, TrendingDown, TrendingUp } from 'lucide-react'
+import { Activity, ArrowUpRight, Gauge, LineChart, Plus, Target, TrendingDown, TrendingUp } from 'lucide-react'
 import { Button, EmptyState, PageHeader, StatCard } from '@/ui'
 import { getWatchlist, type TickerData } from '@/lib/queries'
 import { pct } from '@/lib/format'
@@ -33,6 +33,7 @@ function toRow(t: TickerData): WatchlistRow {
     fwdPct: sc.fwd.pct,
     fwdState: sc.fwd.state,
     fwdLabel,
+    pePremium: sc.pe.premiumFlag,
     passing: sc.passing,
     scored: sc.scored,
   }
@@ -44,8 +45,15 @@ export default async function DashboardPage() {
 
   const total = rows.length
   const cleanSweep = rows.filter((r) => r.scored > 0 && r.passing === r.scored).length
-  const premium = watchlist.filter((t) => t.scorecard.pe.premiumFlag).length
-  const decel = rows.filter((r) => r.qoqState === 'fail').length
+  const premium = rows.filter((r) => r.pePremium).length
+  const decel = rows.filter((r) => r.qoqLabel === 'Decelerating').length
+
+  const scoredRows = rows.filter((r) => r.scored > 0)
+  const avgScore =
+    scoredRows.length > 0 ? scoredRows.reduce((s, r) => s + r.passing, 0) / scoredRows.length : 0
+  const highConviction = rows.filter((r) => r.passing >= 4).length
+  const accel = rows.filter((r) => r.qoqLabel === 'Accelerating').length
+  const fwdGrowth = rows.filter((r) => r.fwdState !== 'na' && (r.fwdPct ?? 0) > 0).length
 
   return (
     <div className="space-y-6">
@@ -64,7 +72,7 @@ export default async function DashboardPage() {
         <EmptyState
           icon={<LineChart className="h-8 w-8" />}
           title="No tickers yet"
-          description="Add your first ticker to start tracking YoY growth, QoQ trend, and forward signals. Try NVDA, AAPL, or any symbol."
+          description="Add your first ticker to start tracking QoQ EPS growth, sequential trend, and forward signals. Try NVDA, AAPL, or any symbol."
           action={
             <Button asChild>
               <Link href="#">
@@ -99,7 +107,31 @@ export default async function DashboardPage() {
               icon={<TrendingDown className="h-4 w-4" />}
               label="Decelerating"
               value={decel}
-              meta="QoQ EPS deltas trending down"
+              meta="sequential EPS deltas trending down"
+            />
+            <StatCard
+              icon={<Gauge className="h-4 w-4" />}
+              label="Average score"
+              value={`${avgScore.toFixed(1)} / 5`}
+              meta={`across ${scoredRows.length} scored`}
+            />
+            <StatCard
+              icon={<Target className="h-4 w-4" />}
+              label="High conviction"
+              value={highConviction}
+              meta="passing ≥4 of 5 signals"
+            />
+            <StatCard
+              icon={<Activity className="h-4 w-4" />}
+              label="Accelerating"
+              value={accel}
+              meta="sequential EPS deltas trending up"
+            />
+            <StatCard
+              icon={<ArrowUpRight className="h-4 w-4" />}
+              label="Forward growth"
+              value={fwdGrowth}
+              meta="forward P/E implies EPS growth"
             />
           </div>
 
