@@ -8,8 +8,9 @@ import { db } from './db'
 // earnings land. Called by /api/ingest, the server actions, and (via HTTP) the
 // Inngest weekly cron.
 
+// Mirrors getProvider(): mock only when explicitly requested, else live FMP.
 function sourceName(): string {
-  return process.env.MARKET_DATA_PROVIDER ?? (process.env.MARKET_DATA_FMP_API_KEY ? 'fmp' : 'mock')
+  return process.env.MARKET_DATA_PROVIDER?.toLowerCase() === 'mock' ? 'mock' : 'fmp'
 }
 
 export interface IngestResult {
