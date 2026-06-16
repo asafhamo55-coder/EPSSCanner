@@ -51,6 +51,26 @@ function pctFmt(frac: number): string {
   return `${v > 0 ? '+' : ''}${v.toFixed(1)}%`
 }
 
+// Projection-table cells: value with the year-over-year % change in parens
+// underneath (none for the base year), coloured green/red by direction.
+function projectionCells(values: number[]) {
+  return values.map((v, i) => {
+    const prev = i > 0 ? values[i - 1] : null
+    const yoy = prev != null && prev !== 0 ? (v / prev - 1) * 100 : null
+    return (
+      <td key={i}>
+        <div>{fmt(v)}</div>
+        {yoy != null ? (
+          <div className={`text-xs ${yoy >= 0 ? 'text-pos' : 'text-neg'}`}>
+            ({yoy >= 0 ? '+' : ''}
+            {yoy.toFixed(1)}%)
+          </div>
+        ) : null}
+      </td>
+    )
+  })
+}
+
 function NumField({
   label,
   value,
@@ -207,15 +227,11 @@ export function EvaluationView() {
             <tbody className="[&>tr>td]:px-4 [&>tr>td]:py-2.5 [&>tr>td]:text-right">
               <tr className="border-b border-border">
                 <td className="text-left font-medium text-foreground">Revenue ($bn)</td>
-                {result.revenue.map((v, i) => (
-                  <td key={i}>{fmt(v)}</td>
-                ))}
+                {projectionCells(result.revenue)}
               </tr>
               <tr>
                 <td className="text-left font-medium text-foreground">Net income ($bn)</td>
-                {result.netIncome.map((v, i) => (
-                  <td key={i}>{fmt(v)}</td>
-                ))}
+                {projectionCells(result.netIncome)}
               </tr>
             </tbody>
           </table>
