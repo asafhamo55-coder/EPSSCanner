@@ -161,9 +161,10 @@ export function Scorecard({ data }: { data: TickerData }) {
         title="Forward growth (P/E)"
         chip={<SignalChip state={sc.fwd.state} label={sc.fwd.state === 'na' ? 'N/A' : pct(sc.fwd.pct)} />}
       >
+        <KeyValue label="Trailing P/E" value={sc.fwd.trailingPe != null ? `${num(sc.fwd.trailingPe)}×` : '—'} />
+        <KeyValue label="Forward P/E" value={sc.fwd.forwardPe != null ? `${num(sc.fwd.forwardPe)}×` : '—'} />
         <KeyValue label="Trailing ÷ Forward" value={sc.fwd.ratio != null ? ratio(sc.fwd.ratio) : '—'} />
         <KeyValue label="Implied growth" value={sc.fwd.state === 'na' ? '—' : pct(sc.fwd.pct)} />
-        <KeyValue label="Forward annual EPS" value={num(sc.fwd.fwdAnnualEps)} />
       </StepCard>
 
       <Card className="bg-background/40">

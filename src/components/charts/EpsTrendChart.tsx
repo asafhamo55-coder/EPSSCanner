@@ -53,14 +53,27 @@ export function EpsTrendChart({
       }
     })
 
+    // QoQ EPS growth (the dashboard's step-3 metric): each quarter vs the same
+    // quarter a year earlier, in percent, across actuals and the forecast. Drawn
+    // on a secondary right axis so it overlays the EPS lines.
+    const combined: (number | null)[] = [
+      ...actuals.map((a) => a.epsActual),
+      ...prediction.map((p) => p.eps),
+    ]
+    const growth = combined.map((v, i) => {
+      const yearAgo = i >= 4 ? combined[i - 4] : null
+      if (v == null || yearAgo == null || yearAgo <= 0) return null
+      return Math.round((v / yearAgo - 1) * 1000) / 10
+    })
+
     return {
-      grid: { top: 30, right: 16, bottom: 28, left: 40, containLabel: false },
+      grid: { top: 30, right: 48, bottom: 28, left: 40, containLabel: false },
       legend: {
         top: 0,
         right: 0,
         itemWidth: 18,
         textStyle: { fontSize: 11, color: tokens.screener.muted },
-        data: ['EPS (actual)', 'Forecast (next 4Q)'],
+        data: ['EPS (actual)', 'Forecast (next 4Q)', 'QoQ EPS growth (%)'],
       },
       tooltip: {
         trigger: 'axis',
@@ -73,12 +86,21 @@ export function EpsTrendChart({
         axisTick: { show: false },
         axisLabel: { fontSize: 11, color: tokens.screener.muted },
       },
-      yAxis: {
-        type: 'value',
-        scale: true,
-        splitLine: { lineStyle: { color: tokens.screener.border } },
-        axisLabel: { fontSize: 11, color: tokens.screener.muted },
-      },
+      yAxis: [
+        {
+          type: 'value',
+          scale: true,
+          splitLine: { lineStyle: { color: tokens.screener.border } },
+          axisLabel: { fontSize: 11, color: tokens.screener.muted },
+        },
+        {
+          type: 'value',
+          position: 'right',
+          scale: true,
+          splitLine: { show: false },
+          axisLabel: { fontSize: 11, color: tokens.screener.muted, formatter: '{value}%' },
+        },
+      ],
       series: [
         {
           name: 'EPS (actual)',
@@ -98,6 +120,17 @@ export function EpsTrendChart({
           smooth: true,
           lineStyle: { width: 2, type: 'dashed', color: tokens.screener.accent },
           itemStyle: { color: tokens.screener.accent },
+          connectNulls: true,
+        },
+        {
+          name: 'QoQ EPS growth (%)',
+          type: 'line',
+          yAxisIndex: 1,
+          data: growth,
+          smooth: true,
+          symbol: 'none',
+          lineStyle: { width: 1.5, type: 'dotted', color: tokens.screener.pos },
+          itemStyle: { color: tokens.screener.pos },
           connectNulls: true,
         },
       ],
