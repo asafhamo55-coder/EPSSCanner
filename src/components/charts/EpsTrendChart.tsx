@@ -18,6 +18,13 @@ export interface EpsTrendForecast {
   source: 'consensus' | 'model'
 }
 
+/** 'YYYYQn' → the same quarter one year earlier ('2026Q2' → '2025Q2'). */
+function priorYearLabel(label: string): string | null {
+  const m = /^(\d{4})Q([1-4])$/.exec(label)
+  if (!m) return null
+  return `${Number(m[1]) - 1}Q${m[2]}`
+}
+
 export function EpsTrendChart({
   actuals,
   prediction,
@@ -53,17 +60,23 @@ export function EpsTrendChart({
       }
     })
 
-    // QoQ EPS growth (the dashboard's step-3 metric): each quarter vs the same
-    // quarter a year earlier, in percent, across actuals and the forecast. Drawn
-    // on a secondary right axis so it overlays the EPS lines.
-    const combined: (number | null)[] = [
-      ...actuals.map((a) => a.epsActual),
-      ...prediction.map((p) => p.eps),
+    // QoQ EPS growth (the dashboard's step-3 metric): each quarter ÷ the SAME
+    // fiscal quarter one year earlier, matched by label (2026Q2 ÷ 2025Q2), in
+    // percent, across both actuals and the forecast. Matching by label — rather
+    // than by position — stays correct even when the stored quarters have gaps
+    // or extra rolled-off history.
+    const combined: { label: string; eps: number | null }[] = [
+      ...actuals.map((a) => ({ label: a.fiscalPeriod, eps: a.epsActual })),
+      ...prediction.map((p) => ({ label: p.fiscalPeriod, eps: p.eps })),
     ]
-    const growth = combined.map((v, i) => {
-      const yearAgo = i >= 4 ? combined[i - 4] : null
-      if (v == null || yearAgo == null || yearAgo <= 0) return null
-      return Math.round((v / yearAgo - 1) * 1000) / 10
+    const epsByLabel = new Map<string, number>()
+    for (const c of combined) if (c.eps != null) epsByLabel.set(c.label, c.eps)
+    const growth = combined.map((c) => {
+      if (c.eps == null) return null
+      const yearAgo = priorYearLabel(c.label)
+      const prev = yearAgo != null ? epsByLabel.get(yearAgo) : undefined
+      if (prev == null || prev <= 0) return null
+      return Math.round((c.eps / prev - 1) * 1000) / 10
     })
 
     return {
