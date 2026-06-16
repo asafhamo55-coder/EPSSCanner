@@ -90,7 +90,17 @@ export function EpsTrendChart({
       },
       tooltip: {
         trigger: 'axis',
-        valueFormatter: (v: number | null) => (v == null ? '—' : v.toFixed(2)),
+        formatter: (params: { axisValue: string; marker: string; seriesName: string; value: number | null }[]) => {
+          const head = params[0]?.axisValue ?? ''
+          const lines = params
+            .filter((p) => p.value != null)
+            .map((p) => {
+              const isPct = p.seriesName === 'QoQ EPS growth (%)'
+              const v = p.value as number
+              return `${p.marker} ${p.seriesName}: ${isPct ? `${v.toFixed(1)}%` : v.toFixed(2)}`
+            })
+          return `${head}<br/>${lines.join('<br/>')}`
+        },
       },
       xAxis: {
         type: 'category',
@@ -140,11 +150,14 @@ export function EpsTrendChart({
           type: 'line',
           yAxisIndex: 1,
           data: growth,
-          smooth: true,
-          symbol: 'none',
+          smooth: false,
+          symbol: 'circle',
+          symbolSize: 5,
           lineStyle: { width: 1.5, type: 'dotted', color: tokens.screener.pos },
           itemStyle: { color: tokens.screener.pos },
-          connectNulls: true,
+          // Break the line at quarters with no same-quarter-last-year data
+          // instead of drawing a misleading straight segment across the gap.
+          connectNulls: false,
         },
       ],
     }
