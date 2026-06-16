@@ -23,6 +23,7 @@ function toRow(t: TickerData): WatchlistRow {
     symbol: t.symbol,
     name: t.name,
     trailingPe: sc.pe.trailingPe,
+    forwardPe: sc.fwd.forwardPe,
     peState: sc.pe.state,
     fundState: sc.fundamentals.state,
     yoyPct: sc.yoy.pct,

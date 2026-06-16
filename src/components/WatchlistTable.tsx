@@ -12,6 +12,7 @@ export interface WatchlistRow {
   symbol: string
   name: string | null
   trailingPe: number | null
+  forwardPe: number | null
   peState: SignalState
   fundState: SignalState
   yoyPct: number | null
@@ -243,10 +244,11 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
               <tr className="border-b border-border text-left [&>th]:px-4 [&>th]:py-3">
                 <SortHeader label="Ticker" k="symbol" />
                 <th className="font-medium text-muted">Trailing P/E (1)</th>
-                <th className="font-medium text-muted">Fundamentals (2)</th>
                 <SortHeader label="QoQ EPS (3)" k="yoyPct" />
+                <th className="font-medium text-muted">Forward P/E</th>
+                <th className="font-medium text-muted">NTM EPS Growth (%)</th>
+                <th className="font-medium text-muted">Fundamentals (2)</th>
                 <th className="font-medium text-muted">QoQ trend (4)</th>
-                <th className="font-medium text-muted">Forward (5)</th>
                 <SortHeader label="Score" k="passing" />
                 <th />
               </tr>
@@ -254,7 +256,7 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
             <tbody>
               {sorted.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-4 py-10 text-center text-sm text-muted">
+                  <td colSpan={9} className="px-4 py-10 text-center text-sm text-muted">
                     No tickers match these filters.
                   </td>
                 </tr>
@@ -276,16 +278,21 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
                       />
                     </td>
                     <td>
-                      <SignalChip state={r.fundState} />
-                    </td>
-                    <td>
                       <SignalChip state={r.yoyState} label={r.yoyLabel} />
                     </td>
                     <td>
-                      <SignalChip state={r.qoqState} label={r.qoqLabel} />
+                      <span className="text-foreground">
+                        {r.forwardPe != null ? `${r.forwardPe.toFixed(1)}×` : 'N/A'}
+                      </span>
                     </td>
                     <td>
                       <SignalChip state={r.fwdState} label={r.fwdLabel} />
+                    </td>
+                    <td>
+                      <SignalChip state={r.fundState} />
+                    </td>
+                    <td>
+                      <SignalChip state={r.qoqState} label={r.qoqLabel} />
                     </td>
                     <td>
                       <span className="font-medium text-foreground">
