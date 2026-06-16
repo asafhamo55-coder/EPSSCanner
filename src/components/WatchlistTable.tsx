@@ -242,7 +242,7 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
             <thead>
               <tr className="border-b border-border text-left [&>th]:px-4 [&>th]:py-3">
                 <SortHeader label="Ticker" k="symbol" />
-                <th className="font-medium text-muted">P/E (1)</th>
+                <th className="font-medium text-muted">Trailing P/E (1)</th>
                 <th className="font-medium text-muted">Fundamentals (2)</th>
                 <SortHeader label="QoQ EPS (3)" k="yoyPct" />
                 <th className="font-medium text-muted">QoQ trend (4)</th>
