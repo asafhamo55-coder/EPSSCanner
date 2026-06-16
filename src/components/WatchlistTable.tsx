@@ -3,7 +3,7 @@
 import { useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { ArrowDown, ArrowUp, Search, X } from 'lucide-react'
-import { Card } from '@/ui'
+import { Badge, Card } from '@/ui'
 import type { SignalState } from '@/lib/signals'
 import { SignalChip } from './SignalChip'
 import { RemoveTickerButton } from './RemoveTickerButton'
@@ -13,6 +13,8 @@ export interface WatchlistRow {
   name: string | null
   trailingPe: number | null
   forwardPe: number | null
+  peg5yr: number | null
+  epsCagr5yr: number | null
   peState: SignalState
   fundState: SignalState
   yoyPct: number | null
@@ -247,6 +249,8 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
                 <SortHeader label="QoQ EPS (3)" k="yoyPct" />
                 <th className="font-medium text-muted">Forward P/E</th>
                 <th className="font-medium text-muted">NTM EPS Growth (%)</th>
+                <th className="font-medium text-muted">PEG (5yr exp)</th>
+                <th className="font-medium text-muted">EPS CAGR 5yr expected</th>
                 <th className="font-medium text-muted">Fundamentals (2)</th>
                 <th className="font-medium text-muted">QoQ trend (4)</th>
                 <SortHeader label="Score" k="passing" />
@@ -256,7 +260,7 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
             <tbody>
               {sorted.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="px-4 py-10 text-center text-sm text-muted">
+                  <td colSpan={11} className="px-4 py-10 text-center text-sm text-muted">
                     No tickers match these filters.
                   </td>
                 </tr>
@@ -287,6 +291,26 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
                     </td>
                     <td>
                       <SignalChip state={r.fwdState} label={r.fwdLabel} />
+                    </td>
+                    <td>
+                      <span className="text-foreground">
+                        {r.peg5yr != null ? r.peg5yr.toFixed(2) : 'N/A'}
+                      </span>
+                    </td>
+                    <td>
+                      {r.epsCagr5yr != null ? (
+                        <Badge
+                          variant={
+                            r.epsCagr5yr < 15 ? 'destructive' : r.epsCagr5yr <= 30 ? 'warning' : 'success'
+                          }
+                          size="sm"
+                        >
+                          {r.epsCagr5yr.toFixed(1)}%
+                          {r.epsCagr5yr < 15 ? '' : r.epsCagr5yr <= 30 ? ' · Good' : ' · Excellent'}
+                        </Badge>
+                      ) : (
+                        <span className="text-muted">N/A</span>
+                      )}
                     </td>
                     <td>
                       <SignalChip state={r.fundState} />

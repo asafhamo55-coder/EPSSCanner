@@ -84,7 +84,7 @@ interface QuoteSummary {
     marketCap?: YNum
   }
   summaryDetail?: { trailingPE?: YNum; forwardPE?: YNum }
-  defaultKeyStatistics?: { forwardPE?: YNum }
+  defaultKeyStatistics?: { forwardPE?: YNum; pegRatio?: YNum; trailingPegRatio?: YNum }
   financialData?: {
     profitMargins?: YNum
     grossMargins?: YNum
@@ -228,6 +228,7 @@ export class YahooProvider implements DataProvider {
       price: num(p.regularMarketPrice),
       trailingPe: num(sd.trailingPE),
       forwardPe: num(sd.forwardPE) ?? num(ks.forwardPE),
+      peg5yr: num(ks.pegRatio) ?? num(ks.trailingPegRatio),
       netMarginTtm: num(fd.profitMargins),
       grossMarginTtm: num(fd.grossMargins),
       operatingMarginTtm: num(fd.operatingMargins),

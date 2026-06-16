@@ -15,6 +15,10 @@ function capitalize(s: string): string {
 
 function toRow(t: TickerData): WatchlistRow {
   const sc = t.scorecard
+  // EPS CAGR (5-yr expected) = trailing P/E ÷ PEG ratio (5-yr expected).
+  const peg5yr = t.valuation.peg5yr
+  const epsCagr5yr =
+    sc.pe.trailingPe != null && peg5yr != null && peg5yr !== 0 ? sc.pe.trailingPe / peg5yr : null
   const yoyLabel =
     sc.yoy.state === 'turnaround' ? 'Turnaround' : sc.yoy.state === 'na' ? 'N/A' : pct(sc.yoy.pct)
   const qoqLabel = sc.qoq.label === 'na' ? 'N/A' : capitalize(sc.qoq.label)
@@ -24,6 +28,8 @@ function toRow(t: TickerData): WatchlistRow {
     name: t.name,
     trailingPe: sc.pe.trailingPe,
     forwardPe: sc.fwd.forwardPe,
+    peg5yr,
+    epsCagr5yr,
     peState: sc.pe.state,
     fundState: sc.fundamentals.state,
     yoyPct: sc.yoy.pct,

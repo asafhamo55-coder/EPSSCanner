@@ -25,6 +25,7 @@ export interface Valuation {
   price: number | null
   trailingPe: number | null
   forwardPe: number | null
+  peg5yr: number | null
   netMarginTtm: number | null
   grossMarginTtm: number | null
   operatingMarginTtm: number | null
@@ -55,6 +56,7 @@ const EMPTY_VALUATION: Valuation = {
   price: null,
   trailingPe: null,
   forwardPe: null,
+  peg5yr: null,
   netMarginTtm: null,
   grossMarginTtm: null,
   operatingMarginTtm: null,
@@ -101,11 +103,11 @@ async function loadFor(tickerId: string) {
       .select('fiscal_period, period_end, eps_actual, eps_estimate, is_forecast')
       .eq('ticker_id', tickerId)
       .order('period_end', { ascending: true }),
+    // select('*') so the additive peg_5yr column loads when present without
+    // erroring on installs where migration 0028 hasn't been applied yet.
     supabase
       .from('screener_valuation_snapshots')
-      .select(
-        'as_of, price, trailing_pe, forward_pe, net_margin_ttm, gross_margin_ttm, operating_margin_ttm, roi_ttm, market_cap',
-      )
+      .select('*')
       .eq('ticker_id', tickerId)
       .order('as_of', { ascending: false })
       .limit(1),
@@ -131,6 +133,7 @@ async function loadFor(tickerId: string) {
         price: (v.price as number | null) ?? null,
         trailingPe: (v.trailing_pe as number | null) ?? null,
         forwardPe: (v.forward_pe as number | null) ?? null,
+        peg5yr: (v.peg_5yr as number | null) ?? null,
         netMarginTtm: (v.net_margin_ttm as number | null) ?? null,
         grossMarginTtm: (v.gross_margin_ttm as number | null) ?? null,
         operatingMarginTtm: (v.operating_margin_ttm as number | null) ?? null,

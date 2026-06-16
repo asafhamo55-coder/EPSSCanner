@@ -104,6 +104,17 @@ export async function ingestTicker(symbol: string): Promise<IngestResult> {
       { onConflict: 'ticker_id,as_of' },
     )
     if (error) throw new Error(`Failed to upsert valuation for ${sym}: ${error.message}`)
+
+    // peg_5yr is an additive column (migration 0028). Set it best-effort and
+    // ignore the error if the migration hasn't been applied yet, so ingest
+    // keeps working either way.
+    if (val.peg5yr != null) {
+      await supabase
+        .from('screener_valuation_snapshots')
+        .update({ peg_5yr: val.peg5yr })
+        .eq('ticker_id', tickerId)
+        .eq('as_of', val.asOf)
+    }
   }
 
   if (annual.length) {

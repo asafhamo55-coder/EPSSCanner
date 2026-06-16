@@ -22,6 +22,8 @@ export interface ValuationSnapshot {
   price: number | null
   trailingPe: number | null
   forwardPe: number | null
+  /** PEG ratio (5-yr expected). Trailing P/E ÷ this ≈ expected EPS CAGR %. */
+  peg5yr: number | null
   netMarginTtm: number | null
   grossMarginTtm: number | null
   operatingMarginTtm: number | null

@@ -157,25 +157,24 @@ export class FmpProvider implements DataProvider {
   }
 
   async getValuation(symbol: string): Promise<ValuationSnapshot> {
-    const [ratios, metrics, quotes, estimates, yahooPe] = await Promise.all([
+    const [ratios, metrics, quotes, estimates, yahoo] = await Promise.all([
       get<FmpRatiosTtm[]>(symbol, '/ratios-ttm'),
       get<FmpKeyMetricsTtm[]>(symbol, '/key-metrics-ttm'),
       get<FmpQuote[]>(symbol, '/quote'),
       get<FmpAnnualEstimate[]>(symbol, '/analyst-estimates', { period: 'annual', limit: '10' }),
       // FMP's priceToEarningsRatioTTM uses an adjusted-EPS basis that reads low
-      // vs the headline GAAP-diluted trailing P/E quoted everywhere else. Pull
-      // the standard trailing P/E from keyless Yahoo (parallel, best-effort).
-      new YahooProvider()
-        .getValuation(symbol)
-        .then((v) => v.trailingPe)
-        .catch(() => null),
+      // vs the headline GAAP-diluted trailing P/E quoted everywhere else, and it
+      // has no 5-yr-expected PEG. Pull both from keyless Yahoo (parallel,
+      // best-effort).
+      new YahooProvider().getValuation(symbol).catch(() => null),
     ])
     const r = ratios[0] ?? {}
     const km = metrics[0] ?? {}
     const q = quotes[0] ?? {}
 
     const price = toNum(q.price)
-    const trailingPe = yahooPe ?? toNum(r.priceToEarningsRatioTTM)
+    const trailingPe = yahoo?.trailingPe ?? toNum(r.priceToEarningsRatioTTM)
+    const peg5yr = yahoo?.peg5yr ?? null
 
     // Forward P/E: derive it from price ÷ next fiscal-year consensus EPS. The
     // stable quote no longer carries `pe`/`eps`, so we pull the nearest future
@@ -194,6 +193,7 @@ export class FmpProvider implements DataProvider {
       price,
       trailingPe,
       forwardPe,
+      peg5yr,
       netMarginTtm: toNum(r.netProfitMarginTTM),
       grossMarginTtm: toNum(r.grossProfitMarginTTM),
       operatingMarginTtm: toNum(r.operatingProfitMarginTTM),
