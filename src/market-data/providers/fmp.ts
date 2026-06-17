@@ -185,8 +185,12 @@ export class FmpProvider implements DataProvider {
       .filter((e) => e.date > t && (toNum(e.epsAvg) ?? 0) > 0)
       .sort((a, b) => a.date.localeCompare(b.date))[0]
     const forwardEps = nextEstimate ? toNum(nextEstimate.epsAvg) : null
-    const forwardPe =
+    const fmpForwardPe =
       price !== null && price > 0 && forwardEps !== null && forwardEps > 0 ? price / forwardEps : null
+    // Prefer Yahoo's forward P/E (next-fiscal-year basis — what Yahoo Finance
+    // shows). FMP's nearest-future-FY derivation overstates it for names near
+    // fiscal year-end (e.g. MU: FY2026 16.9 vs FY2027 ~9.4). FMP is the fallback.
+    const forwardPe = yahoo?.forwardPe ?? fmpForwardPe
 
     return {
       asOf: t,
