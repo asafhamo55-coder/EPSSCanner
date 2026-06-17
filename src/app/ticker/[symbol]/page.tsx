@@ -147,7 +147,7 @@ export default async function TickerPage({
                 <KeyValue label="Price" value={usd(data.valuation.price)} />
                 <KeyValue label="Market cap" value={bigUsd(data.valuation.marketCap)} />
                 <KeyValue label="Trailing P/E" value={data.valuation.trailingPe != null ? `${num(data.valuation.trailingPe)}×` : '—'} />
-                <KeyValue label="Forward P/E" value={data.valuation.forwardPeDisplay != null ? `${num(data.valuation.forwardPeDisplay)}×` : '—'} />
+                <KeyValue label="Forward P/E" value={data.valuation.forwardPe != null ? `${num(data.valuation.forwardPe)}×` : '—'} />
                 <KeyValue label="Net margin (TTM)" value={marginPct(data.valuation.netMarginTtm)} />
                 <KeyValue label="Gross margin (TTM)" value={marginPct(data.valuation.grossMarginTtm)} />
                 <KeyValue label="Operating margin (TTM)" value={marginPct(data.valuation.operatingMarginTtm)} />

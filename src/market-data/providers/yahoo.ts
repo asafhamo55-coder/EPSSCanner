@@ -48,6 +48,28 @@ function num(v: YNum): number | null {
   return typeof n === 'number' && Number.isFinite(n) ? n : null
 }
 
+/** Yahoo-site Forward P/E: price ÷ the current fiscal year's EPS estimate,
+ *  rolling to next year when the current FY ends within ~4 months. */
+function forwardPeFromTrend(
+  trend: QuoteSummary['earningsTrend'],
+  price: number | null,
+): number | null {
+  if (price == null || price <= 0) return null
+  const periods = trend?.trend ?? []
+  const cy = periods.find((t) => t.period === '0y')
+  const ny = periods.find((t) => t.period === '+1y')
+  let chosen = cy
+  const end = cy?.endDate
+  if (end) {
+    const daysLeft = (Date.parse(end) - Date.now()) / 86_400_000
+    if (daysLeft < 120 && num(ny?.earningsEstimate?.avg) != null) chosen = ny
+  } else if (ny) {
+    chosen = ny
+  }
+  const eps = num(chosen?.earningsEstimate?.avg)
+  return eps != null && eps > 0 ? price / eps : null
+}
+
 // ── credentials (cookie + crumb), cached for the process lifetime ──────────
 let creds: { cookie: string; crumb: string } | null = null
 
@@ -223,11 +245,17 @@ export class YahooProvider implements DataProvider {
     const ks = s.defaultKeyStatistics ?? {}
     const fd = s.financialData ?? {}
 
+    const price = num(p.regularMarketPrice)
     return {
       asOf: new Date().toISOString().slice(0, 10),
-      price: num(p.regularMarketPrice),
+      price,
       trailingPe: num(sd.trailingPE),
-      forwardPe: num(sd.forwardPE) ?? num(ks.forwardPE),
+      // Yahoo Finance's *website* Forward P/E = price ÷ current-fiscal-year EPS
+      // estimate, rolling to next year only when the current FY is within ~4
+      // months of ending. (The API's summaryDetail.forwardPE uses next-FY and
+      // disagrees with the site — e.g. PLTR site 90.91 vs API 64.) Fall back to
+      // the API field when earningsTrend is unavailable.
+      forwardPe: forwardPeFromTrend(s.earningsTrend, price) ?? num(sd.forwardPE) ?? num(ks.forwardPE),
       peg5yr: num(ks.pegRatio) ?? num(ks.trailingPegRatio),
       netMarginTtm: num(fd.profitMargins),
       grossMarginTtm: num(fd.grossMargins),

@@ -185,12 +185,12 @@ export class FmpProvider implements DataProvider {
       .filter((e) => e.date > t && (toNum(e.epsAvg) ?? 0) > 0)
       .sort((a, b) => a.date.localeCompare(b.date))[0]
     const forwardEps = nextEstimate ? toNum(nextEstimate.epsAvg) : null
-    // forwardPe drives the NTM EPS Growth signal (trailing÷forward − 1), so it
-    // stays the FMP analyst-estimate derivation that gives sane growth numbers.
-    // The dashboard's Forward P/E *column* shows Yahoo's value separately
-    // (queries.ts forwardPeDisplay) — they're intentionally decoupled.
-    const forwardPe =
+    const fmpForwardPe =
       price !== null && price > 0 && forwardEps !== null && forwardEps > 0 ? price / forwardEps : null
+    // Forward P/E = Yahoo's value (what Yahoo Finance shows); it drives BOTH the
+    // Forward P/E column AND the NTM EPS Growth (= trailing ÷ forward × 100).
+    // FMP's analyst-estimate derivation is only a fallback when Yahoo lacks it.
+    const forwardPe = yahoo?.forwardPe ?? fmpForwardPe
 
     return {
       asOf: t,
