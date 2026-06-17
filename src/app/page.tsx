@@ -22,10 +22,9 @@ function toRow(t: TickerData): WatchlistRow {
   const yoyLabel =
     sc.yoy.state === 'turnaround' ? 'Turnaround' : sc.yoy.state === 'na' ? 'N/A' : pct(sc.yoy.pct)
   const qoqLabel = sc.qoq.label === 'na' ? 'N/A' : capitalize(sc.qoq.label)
-  // NTM EPS Growth (%) shows the trailing÷forward P/E ratio as a percent
-  // (no −1): forward EPS as a % of trailing EPS, e.g. 1.65 → 165%.
-  const fwdLabel =
-    sc.fwd.state === 'na' || sc.fwd.ratio == null ? 'N/A' : `${(sc.fwd.ratio * 100).toFixed(1)}%`
+  // NTM EPS Growth (%) = (trailing÷forward P/E − 1) × 100, i.e. the implied
+  // forward EPS growth (PLTR 1.65 → +65%).
+  const fwdLabel = sc.fwd.state === 'na' ? 'N/A' : pct(sc.fwd.pct)
   return {
     symbol: t.symbol,
     name: t.name,
