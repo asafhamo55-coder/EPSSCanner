@@ -296,7 +296,7 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
                       <span
                         className={
                           r.peg5yr != null && r.peg5yr < 1
-                            ? 'font-semibold text-pos'
+                            ? 'inline-block rounded bg-[hsl(var(--pos)/0.22)] px-2 py-0.5 font-medium text-foreground'
                             : 'text-foreground'
                         }
                       >
