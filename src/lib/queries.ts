@@ -2,22 +2,27 @@ import { buildScorecard, type Scorecard } from './signals'
 import { db } from './db'
 import { YahooProvider } from '@/market-data'
 
-// Live PEG fallback. peg_5yr is only persisted once migration 0028 is applied
-// AND a refresh re-ingests; until then the stored value is null, so we fetch
-// the 5-yr-expected PEG straight from keyless Yahoo. Cached briefly per warm
-// instance so repeated dashboard loads don't re-hammer Yahoo.
-const pegCache = new Map<string, { peg: number | null; ts: number }>()
-const PEG_TTL_MS = 60 * 60 * 1000
+// Live Yahoo enrichment. Two dashboard values come from Yahoo at read time:
+//   - peg5yr   — falls back here when the stored column is null;
+//   - forwardPe (DISPLAY) — the Forward P/E column shows Yahoo's next-FY value,
+//     which is intentionally NOT the same as the stored FMP forwardPe that
+//     drives the NTM EPS Growth signal.
+// Cached briefly per warm instance so repeated loads don't re-hammer Yahoo.
+const yahooCache = new Map<string, { peg: number | null; forwardPe: number | null; ts: number }>()
+const YAHOO_TTL_MS = 60 * 60 * 1000
 
-async function livePeg(symbol: string, yahoo: YahooProvider): Promise<number | null> {
-  const cached = pegCache.get(symbol)
-  if (cached && Date.now() - cached.ts < PEG_TTL_MS) return cached.peg
-  const peg = await yahoo
+async function liveYahoo(
+  symbol: string,
+  yahoo: YahooProvider,
+): Promise<{ peg: number | null; forwardPe: number | null }> {
+  const cached = yahooCache.get(symbol)
+  if (cached && Date.now() - cached.ts < YAHOO_TTL_MS) return { peg: cached.peg, forwardPe: cached.forwardPe }
+  const r = await yahoo
     .getValuation(symbol)
-    .then((v) => v.peg5yr)
-    .catch(() => null)
-  pegCache.set(symbol, { peg, ts: Date.now() })
-  return peg
+    .then((v) => ({ peg: v.peg5yr, forwardPe: v.forwardPe }))
+    .catch(() => ({ peg: null, forwardPe: null }))
+  yahooCache.set(symbol, { ...r, ts: Date.now() })
+  return r
 }
 
 // Read helpers for the dashboard + ticker detail. Reads raw screener_* tables
@@ -43,7 +48,8 @@ export interface Valuation {
   asOf: string | null
   price: number | null
   trailingPe: number | null
-  forwardPe: number | null
+  forwardPe: number | null // FMP-derived; drives the NTM EPS Growth signal
+  forwardPeDisplay: number | null // Yahoo's next-FY value; shown in the column
   peg5yr: number | null
   netMarginTtm: number | null
   grossMarginTtm: number | null
@@ -75,6 +81,7 @@ const EMPTY_VALUATION: Valuation = {
   price: null,
   trailingPe: null,
   forwardPe: null,
+  forwardPeDisplay: null,
   peg5yr: null,
   netMarginTtm: null,
   grossMarginTtm: null,
@@ -152,6 +159,9 @@ async function loadFor(tickerId: string) {
         price: (v.price as number | null) ?? null,
         trailingPe: (v.trailing_pe as number | null) ?? null,
         forwardPe: (v.forward_pe as number | null) ?? null,
+        // default the display value to the stored (FMP) forward P/E; getWatchlist
+        // / getTicker override it with Yahoo's value via liveYahoo().
+        forwardPeDisplay: (v.forward_pe as number | null) ?? null,
         peg5yr: (v.peg_5yr as number | null) ?? null,
         netMarginTtm: (v.net_margin_ttm as number | null) ?? null,
         grossMarginTtm: (v.gross_margin_ttm as number | null) ?? null,
@@ -184,10 +194,11 @@ export async function getWatchlist(): Promise<TickerData[]> {
   return Promise.all(
     rows.map(async (row) => {
       const { eps, valuation, annual } = await loadFor(row.id)
-      let val = valuation
-      if (val.peg5yr == null) {
-        const peg = await livePeg(row.symbol, yahoo)
-        if (peg != null) val = { ...val, peg5yr: peg }
+      const y = await liveYahoo(row.symbol, yahoo)
+      const val: Valuation = {
+        ...valuation,
+        peg5yr: valuation.peg5yr ?? y.peg,
+        forwardPeDisplay: y.forwardPe ?? valuation.forwardPe,
       }
       return assemble(row, eps, val, annual)
     }),
@@ -206,5 +217,11 @@ export async function getTicker(symbol: string): Promise<TickerData | null> {
   if (!data) return null
   const row = data as TickerRow
   const { eps, valuation, annual } = await loadFor(row.id)
-  return assemble(row, eps, valuation, annual)
+  const y = await liveYahoo(row.symbol, new YahooProvider())
+  const val: Valuation = {
+    ...valuation,
+    peg5yr: valuation.peg5yr ?? y.peg,
+    forwardPeDisplay: y.forwardPe ?? valuation.forwardPe,
+  }
+  return assemble(row, eps, val, annual)
 }

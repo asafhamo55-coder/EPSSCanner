@@ -29,7 +29,7 @@ function toRow(t: TickerData): WatchlistRow {
     symbol: t.symbol,
     name: t.name,
     trailingPe: sc.pe.trailingPe,
-    forwardPe: sc.fwd.forwardPe,
+    forwardPe: t.valuation.forwardPeDisplay,
     peg5yr,
     epsCagr5yr,
     peState: sc.pe.state,
