@@ -60,11 +60,30 @@ export async function ingestTicker(symbol: string): Promise<IngestResult> {
   if (tErr || !ticker) throw new Error(`Failed to upsert ticker ${sym}: ${tErr?.message}`)
   const tickerId = ticker.id as string
 
-  const [eps, val, annual] = await Promise.all([
+  const [epsRaw, val, annualRaw] = await Promise.all([
     provider.getQuarterlyEps(sym, 12),
     provider.getValuation(sym),
     provider.getAnnualFinancials(sym, 5),
   ])
+
+  // Collapse rows that map to the same fiscal_period — report-date-derived
+  // labels can collide (e.g. two filings in one calendar quarter), and a batch
+  // upsert with a duplicate conflict key errors with "ON CONFLICT ... cannot
+  // affect row a second time". Prefer an actual over a forecast; otherwise keep
+  // the later row (the provider returns them oldest→newest).
+  const epsByPeriod = new Map<string, (typeof epsRaw)[number]>()
+  for (const r of epsRaw) {
+    const prev = epsByPeriod.get(r.fiscalPeriod)
+    if (!prev || (prev.isForecast && !r.isForecast) || prev.isForecast === r.isForecast) {
+      epsByPeriod.set(r.fiscalPeriod, r)
+    }
+  }
+  const eps = [...epsByPeriod.values()]
+
+  // Same guard for annual rows keyed by fiscal_year.
+  const annualByYear = new Map<number, (typeof annualRaw)[number]>()
+  for (const r of annualRaw) annualByYear.set(r.fiscalYear, r)
+  const annual = [...annualByYear.values()]
 
   if (eps.length) {
     const { error } = await supabase.from('screener_quarterly_eps').upsert(
