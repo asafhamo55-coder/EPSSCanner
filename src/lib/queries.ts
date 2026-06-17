@@ -1,5 +1,24 @@
 import { buildScorecard, type Scorecard } from './signals'
 import { db } from './db'
+import { YahooProvider } from '@/market-data'
+
+// Live PEG fallback. peg_5yr is only persisted once migration 0028 is applied
+// AND a refresh re-ingests; until then the stored value is null, so we fetch
+// the 5-yr-expected PEG straight from keyless Yahoo. Cached briefly per warm
+// instance so repeated dashboard loads don't re-hammer Yahoo.
+const pegCache = new Map<string, { peg: number | null; ts: number }>()
+const PEG_TTL_MS = 60 * 60 * 1000
+
+async function livePeg(symbol: string, yahoo: YahooProvider): Promise<number | null> {
+  const cached = pegCache.get(symbol)
+  if (cached && Date.now() - cached.ts < PEG_TTL_MS) return cached.peg
+  const peg = await yahoo
+    .getValuation(symbol)
+    .then((v) => v.peg5yr)
+    .catch(() => null)
+  pegCache.set(symbol, { peg, ts: Date.now() })
+  return peg
+}
 
 // Read helpers for the dashboard + ticker detail. Reads raw screener_* tables
 // and runs the SAME signals engine the ingest path / tests use, so every
@@ -161,10 +180,16 @@ export async function getWatchlist(): Promise<TickerData[]> {
     .order('symbol', { ascending: true })
 
   const rows = (data ?? []) as TickerRow[]
+  const yahoo = new YahooProvider()
   return Promise.all(
     rows.map(async (row) => {
       const { eps, valuation, annual } = await loadFor(row.id)
-      return assemble(row, eps, valuation, annual)
+      let val = valuation
+      if (val.peg5yr == null) {
+        const peg = await livePeg(row.symbol, yahoo)
+        if (peg != null) val = { ...val, peg5yr: peg }
+      }
+      return assemble(row, eps, val, annual)
     }),
   )
 }
