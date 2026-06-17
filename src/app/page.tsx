@@ -1,6 +1,6 @@
 import Link from 'next/link'
-import { Activity, ArrowUpRight, Gauge, LineChart, Plus, Target, TrendingDown, TrendingUp } from 'lucide-react'
-import { Button, EmptyState, PageHeader, StatCard } from '@/ui'
+import { LineChart, Plus } from 'lucide-react'
+import { Button, Card, EmptyState, PageHeader } from '@/ui'
 import { getWatchlist, type TickerData } from '@/lib/queries'
 import { pct } from '@/lib/format'
 import { AddTickerForm } from '@/components/AddTickerForm'
@@ -93,56 +93,25 @@ export default async function DashboardPage() {
         />
       ) : (
         <>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <StatCard
-              icon={<LineChart className="h-4 w-4" />}
-              label="Tickers tracked"
-              value={total}
-              meta="on your watchlist"
-            />
-            <StatCard
-              icon={<TrendingUp className="h-4 w-4" />}
-              label="Passing all signals"
-              value={cleanSweep}
-              meta={`of ${total} clear every scored step`}
-            />
-            <StatCard
-              icon={<TrendingUp className="h-4 w-4" />}
-              label="P/E premium"
-              value={premium}
-              meta="trading above 30× trailing"
-            />
-            <StatCard
-              icon={<TrendingDown className="h-4 w-4" />}
-              label="Decelerating"
-              value={decel}
-              meta="sequential EPS deltas trending down"
-            />
-            <StatCard
-              icon={<Gauge className="h-4 w-4" />}
-              label="Average score"
-              value={`${avgScore.toFixed(1)} / 5`}
-              meta={`across ${scoredRows.length} scored`}
-            />
-            <StatCard
-              icon={<Target className="h-4 w-4" />}
-              label="High conviction"
-              value={highConviction}
-              meta="passing ≥4 of 5 signals"
-            />
-            <StatCard
-              icon={<Activity className="h-4 w-4" />}
-              label="Accelerating"
-              value={accel}
-              meta="sequential EPS deltas trending up"
-            />
-            <StatCard
-              icon={<ArrowUpRight className="h-4 w-4" />}
-              label="Forward growth"
-              value={fwdGrowth}
-              meta="forward P/E implies EPS growth"
-            />
-          </div>
+          <Card className="overflow-x-auto p-0">
+            <div className="flex min-w-max divide-x divide-border">
+              {[
+                { label: 'Tickers', value: total },
+                { label: 'All signals', value: cleanSweep },
+                { label: 'P/E premium', value: premium },
+                { label: 'Decelerating', value: decel },
+                { label: 'Avg score', value: `${avgScore.toFixed(1)}/5` },
+                { label: 'High conviction', value: highConviction },
+                { label: 'Accelerating', value: accel },
+                { label: 'Forward growth', value: fwdGrowth },
+              ].map((s) => (
+                <div key={s.label} className="flex-1 whitespace-nowrap px-3 py-2 text-center">
+                  <span className="text-sm font-bold text-foreground">{s.value}</span>
+                  <span className="ml-1.5 text-[11px] text-muted">{s.label}</span>
+                </div>
+              ))}
+            </div>
+          </Card>
 
           <WatchlistTable rows={rows} />
         </>
