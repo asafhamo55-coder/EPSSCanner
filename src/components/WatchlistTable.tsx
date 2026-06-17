@@ -293,7 +293,13 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
                       <SignalChip state={r.fwdState} label={r.fwdLabel} />
                     </td>
                     <td>
-                      <span className="text-foreground">
+                      <span
+                        className={
+                          r.peg5yr != null && r.peg5yr < 1
+                            ? 'font-semibold text-pos'
+                            : 'text-foreground'
+                        }
+                      >
                         {r.peg5yr != null ? r.peg5yr.toFixed(2) : 'N/A'}
                       </span>
                     </td>
