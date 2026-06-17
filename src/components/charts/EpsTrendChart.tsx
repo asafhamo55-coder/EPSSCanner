@@ -86,7 +86,7 @@ export function EpsTrendChart({
         right: 0,
         itemWidth: 18,
         textStyle: { fontSize: 11, color: tokens.screener.muted },
-        data: ['EPS (actual)', 'Forecast (next 4Q)', 'QoQ EPS growth (%)'],
+        data: ['EPS (actual)', 'Forecast (next 4Q)', 'YoY EPS growth (%)'],
       },
       tooltip: {
         trigger: 'axis',
@@ -95,7 +95,7 @@ export function EpsTrendChart({
           const lines = params
             .filter((p) => p.value != null)
             .map((p) => {
-              const isPct = p.seriesName === 'QoQ EPS growth (%)'
+              const isPct = p.seriesName === 'YoY EPS growth (%)'
               const v = p.value as number
               return `${p.marker} ${p.seriesName}: ${isPct ? `${v.toFixed(1)}%` : v.toFixed(2)}`
             })
@@ -146,7 +146,7 @@ export function EpsTrendChart({
           connectNulls: true,
         },
         {
-          name: 'QoQ EPS growth (%)',
+          name: 'YoY EPS growth (%)',
           type: 'line',
           yAxisIndex: 1,
           data: growth,

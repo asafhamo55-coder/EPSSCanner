@@ -82,7 +82,7 @@ export default async function DashboardPage() {
         <EmptyState
           icon={<LineChart className="h-8 w-8" />}
           title="No tickers yet"
-          description="Add your first ticker to start tracking QoQ EPS growth, sequential trend, and forward signals. Try NVDA, AAPL, or any symbol."
+          description="Add your first ticker to start tracking YoY EPS growth, sequential trend, and forward signals. Try NVDA, AAPL, or any symbol."
           action={
             <Button asChild>
               <Link href="#">

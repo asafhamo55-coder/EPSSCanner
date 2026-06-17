@@ -89,7 +89,7 @@ const TOGGLES: { key: string; label: string; test: (r: WatchlistRow) => boolean 
   { key: 'peband', label: 'P/E in band', test: (r) => r.peState === 'pass' },
   { key: 'premium', label: 'Premium', test: (r) => r.pePremium },
   { key: 'accel', label: 'Accelerating', test: (r) => r.qoqLabel === 'Accelerating' },
-  { key: 'qoqpos', label: 'Positive QoQ EPS', test: (r) => r.yoyState !== 'na' && (r.yoyPct ?? 0) > 0 },
+  { key: 'qoqpos', label: 'Positive YoY EPS', test: (r) => r.yoyState !== 'na' && (r.yoyPct ?? 0) > 0 },
   { key: 'fwd', label: 'Forward growth', test: (r) => r.fwdState !== 'na' && (r.fwdPct ?? 0) > 0 },
 ]
 
@@ -246,7 +246,7 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
               <tr className="border-b border-border text-left [&>th]:px-4 [&>th]:py-3">
                 <SortHeader label="Ticker" k="symbol" />
                 <th className="font-medium text-muted">Trailing P/E (1)</th>
-                <SortHeader label="QoQ EPS (3)" k="yoyPct" />
+                <SortHeader label="YoY EPS (3)" k="yoyPct" />
                 <th className="font-medium text-muted">Forward P/E</th>
                 <th className="font-medium text-muted">NTM EPS Growth (%)</th>
                 <th className="font-medium text-muted">PEG (5yr exp)</th>
