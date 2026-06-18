@@ -2,53 +2,61 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Equity Screener Hub theming — slate-indigo brand on a cool off-white
-   canvas, same family as the other hubs. Finance UX rule: green=up /
-   red=down are DATA colors, so the brand is deliberately neutral and the
-   --pos / --neg tokens are reserved for signal chips + chart deltas only. */
+/* TripleQ Group — clean modern light theme, indigo/violet brand on a cool
+   airy off-white canvas. Finance UX rule: green=up / red=down are DATA colors,
+   so the brand stays neutral-but-premium indigo and the --pos / --neg tokens
+   are reserved for signal chips + chart deltas only. */
 @layer base {
   :root {
-    --radius: 12px;
+    --radius: 14px;
 
-    --background: 220 33% 99%;   /* #FAFBFD */
+    --background: 250 40% 99%;   /* #FBFBFE — cool airy off-white */
     --surface: 0 0% 100%;        /* #FFFFFF */
-    --border: 220 13% 91%;       /* #E5E7EB */
+    --border: 250 24% 92%;       /* #E8E7F1 — soft cool border */
 
-    --primary: 221 83% 53%;      /* #2563EB — blue-600, brand only */
+    --primary: 243 75% 59%;      /* #4F46E5 — indigo-600, brand */
     --primary-fg: 0 0% 100%;
+    --primary-soft: 243 100% 97%;/* #EEF0FF — tinted fills */
+    --secondary: 262 83% 58%;    /* #7C3AED — violet, gradients/accents */
 
     --accent: 38 92% 50%;        /* #F59E0B — amber, AI affordances */
 
-    --foreground: 220 39% 11%;   /* #111827 */
-    --muted: 217 9% 46%;         /* #6B7280 */
+    --foreground: 250 16% 12%;   /* #1A1822 — near-black ink */
+    --muted: 250 8% 46%;         /* #71707F — cool muted */
 
-    --destructive: 0 72% 45%;
+    --destructive: 0 72% 51%;
 
     /* Directional data tokens — used ONLY for signal chips + chart deltas. */
     --pos: 160 84% 31%;          /* #059669 — emerald-600 */
     --neg: 347 77% 50%;          /* #E11D48 — rose-600 */
+
+    --ring: 243 75% 59%;
 
     --font-sans: var(--font-inter), system-ui, sans-serif;
     --font-mono: var(--font-jetbrains-mono), monospace;
   }
 
   :root.dark {
-    --background: 220 14% 8%;    /* #11141A */
-    --surface: 220 14% 12%;      /* #1A1E26 */
-    --border: 220 13% 22%;       /* #2F3540 */
+    --background: 252 22% 7%;    /* #0F0E15 — deep cool ink */
+    --surface: 250 18% 11%;      /* #18161F */
+    --border: 250 12% 22%;       /* #322F3D */
 
-    --primary: 221 83% 63%;
-    --primary-fg: 0 0% 100%;
+    --primary: 243 90% 72%;      /* #818CF8 — indigo-400, lifted */
+    --primary-fg: 250 30% 8%;
+    --primary-soft: 243 40% 18%;
+    --secondary: 262 85% 72%;
 
-    --accent: 38 92% 55%;
+    --accent: 38 92% 58%;
 
-    --foreground: 220 14% 95%;   /* #EEF0F4 */
-    --muted: 217 10% 64%;
+    --foreground: 250 30% 96%;   /* #F1F0F7 */
+    --muted: 250 12% 64%;
 
-    --destructive: 0 78% 65%;
+    --destructive: 0 78% 67%;
 
     --pos: 160 70% 45%;          /* lifted emerald for dark bg */
-    --neg: 347 85% 62%;          /* lifted rose for dark bg */
+    --neg: 347 85% 64%;          /* lifted rose for dark bg */
+
+    --ring: 243 90% 72%;
   }
 
   html {
@@ -57,26 +65,61 @@
 
   body {
     background-color: hsl(var(--background));
+    /* Subtle indigo aura at the top for an airy, premium feel. */
+    background-image: radial-gradient(
+      75% 55% at 50% -12%,
+      hsl(var(--primary) / 0.07),
+      transparent 70%
+    );
+    background-attachment: fixed;
     color: hsl(var(--foreground));
     font-family: var(--font-sans);
+    font-feature-settings: 'cv11', 'ss01';
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
   }
 
+  /* Crisper, tighter display headings — modern fintech look. */
+  h1, h2, h3 {
+    letter-spacing: -0.018em;
+  }
+
   *:focus-visible {
-    outline: 2px solid hsl(var(--primary));
+    outline: 2px solid hsl(var(--ring));
     outline-offset: 2px;
   }
 
   ::selection {
-    background-color: hsl(var(--primary) / 0.2);
+    background-color: hsl(var(--primary) / 0.18);
   }
 }
 
-/* Directional helpers backed by the data tokens above. */
+/* Directional helpers + brand utilities. */
 @layer utilities {
   .text-pos { color: hsl(var(--pos)); }
   .text-neg { color: hsl(var(--neg)); }
   .bg-pos-soft { background-color: hsl(var(--pos) / 0.12); color: hsl(var(--pos)); }
   .bg-neg-soft { background-color: hsl(var(--neg) / 0.12); color: hsl(var(--neg)); }
+
+  /* Indigo→violet brand gradient for hero text / accents. */
+  .text-gradient-brand {
+    background-image: linear-gradient(
+      100deg,
+      hsl(var(--primary)),
+      hsl(var(--secondary))
+    );
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .bg-gradient-brand {
+    background-image: linear-gradient(
+      100deg,
+      hsl(var(--primary)),
+      hsl(var(--secondary))
+    );
+  }
+  .ring-brand {
+    box-shadow: 0 0 0 1px hsl(var(--primary) / 0.12), 0 8px 24px -8px hsl(var(--primary) / 0.35);
+  }
 }

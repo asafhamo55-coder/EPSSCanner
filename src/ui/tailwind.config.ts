@@ -9,6 +9,8 @@ const config: Config = {
         // Apps override these CSS vars per hub at the root layout.
         primary: 'hsl(var(--primary))',
         'primary-fg': 'hsl(var(--primary-fg))',
+        'primary-soft': 'hsl(var(--primary-soft))',
+        secondary: 'hsl(var(--secondary))',
         accent: 'hsl(var(--accent))',
         background: 'hsl(var(--background))',
         surface: 'hsl(var(--surface))',
@@ -16,12 +18,21 @@ const config: Config = {
         foreground: 'hsl(var(--foreground))',
         'muted': 'hsl(var(--muted))',
         destructive: 'hsl(var(--destructive))',
+        ring: 'hsl(var(--ring))',
       },
       borderRadius: {
         DEFAULT: 'var(--radius)',
         lg: 'calc(var(--radius) + 4px)',
         xl: 'calc(var(--radius) + 8px)',
         '2xl': 'calc(var(--radius) + 16px)',
+      },
+      boxShadow: {
+        // Soft, layered, low-opacity shadows for a clean modern light look.
+        xs: '0 1px 2px 0 rgb(17 17 34 / 0.05)',
+        sm: '0 1px 3px 0 rgb(17 17 34 / 0.06), 0 1px 2px -1px rgb(17 17 34 / 0.04)',
+        md: '0 6px 16px -4px rgb(17 17 34 / 0.08), 0 2px 6px -2px rgb(17 17 34 / 0.05)',
+        lg: '0 14px 34px -8px rgb(17 17 34 / 0.12), 0 4px 12px -4px rgb(17 17 34 / 0.06)',
+        xl: '0 28px 56px -14px rgb(17 17 34 / 0.18), 0 8px 20px -8px rgb(17 17 34 / 0.08)',
       },
       fontFamily: {
         sans: ['var(--font-sans)', 'system-ui', 'sans-serif'],

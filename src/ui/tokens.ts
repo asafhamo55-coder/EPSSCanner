@@ -43,16 +43,16 @@ export const tokens = {
   // so the brand/primary is a neutral slate-indigo (never directional) and the
   // pos/neg tokens are reserved exclusively for signal chips + chart deltas.
   screener: {
-    primary: '#2563EB',     // blue-600 — brand chrome only
+    primary: '#4F46E5',     // indigo-600 — TripleQ brand chrome only
     primaryFg: '#ffffff',
     accent: '#F59E0B',      // amber — AI affordances (consistent across hubs)
     pos: '#059669',         // emerald-600 — up / pass / accelerating ONLY
     neg: '#E11D48',         // rose-600 — down / fail / decelerating ONLY
-    bg: '#FAFBFD',
+    bg: '#FBFBFE',
     surface: '#ffffff',
-    border: '#E5E7EB',
-    text: '#111827',
-    muted: '#6B7280',
+    border: '#E8E7F1',
+    text: '#1A1822',
+    muted: '#71707F',
     fontSizeBase: '16px',
   },
 } as const
