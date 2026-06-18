@@ -66,6 +66,12 @@ function toNum(v: unknown): number | null {
   return typeof n === 'number' && Number.isFinite(n) ? n : null
 }
 
+/** A P/E is only meaningful with positive earnings; a negative value (loss)
+ *  must read as N/A, never a misleading negative ratio (e.g. INTC -193.9). */
+function posPe(v: number | null): number | null {
+  return v != null && v > 0 ? v : null
+}
+
 function today(): string {
   return new Date().toISOString().slice(0, 10)
 }
@@ -173,7 +179,7 @@ export class FmpProvider implements DataProvider {
     const q = quotes[0] ?? {}
 
     const price = toNum(q.price)
-    const trailingPe = yahoo?.trailingPe ?? toNum(r.priceToEarningsRatioTTM)
+    const trailingPe = posPe(yahoo?.trailingPe ?? toNum(r.priceToEarningsRatioTTM))
     const peg5yr = yahoo?.peg5yr ?? null
 
     // Forward P/E: derive it from price ÷ next fiscal-year consensus EPS. The
@@ -190,7 +196,7 @@ export class FmpProvider implements DataProvider {
     // Forward P/E = Yahoo's value (what Yahoo Finance shows); it drives BOTH the
     // Forward P/E column AND the NTM EPS Growth (= trailing ÷ forward × 100).
     // FMP's analyst-estimate derivation is only a fallback when Yahoo lacks it.
-    const forwardPe = yahoo?.forwardPe ?? fmpForwardPe
+    const forwardPe = posPe(yahoo?.forwardPe ?? fmpForwardPe)
 
     return {
       asOf: t,

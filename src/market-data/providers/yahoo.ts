@@ -246,16 +246,18 @@ export class YahooProvider implements DataProvider {
     const fd = s.financialData ?? {}
 
     const price = num(p.regularMarketPrice)
+    // A P/E is only meaningful with positive earnings — negative (loss) → null.
+    const posPe = (v: number | null) => (v != null && v > 0 ? v : null)
     return {
       asOf: new Date().toISOString().slice(0, 10),
       price,
-      trailingPe: num(sd.trailingPE),
+      trailingPe: posPe(num(sd.trailingPE)),
       // Yahoo Finance's *website* Forward P/E = price ÷ current-fiscal-year EPS
       // estimate, rolling to next year only when the current FY is within ~4
       // months of ending. (The API's summaryDetail.forwardPE uses next-FY and
       // disagrees with the site — e.g. PLTR site 90.91 vs API 64.) Fall back to
       // the API field when earningsTrend is unavailable.
-      forwardPe: forwardPeFromTrend(s.earningsTrend, price) ?? num(sd.forwardPE) ?? num(ks.forwardPE),
+      forwardPe: posPe(forwardPeFromTrend(s.earningsTrend, price) ?? num(sd.forwardPE) ?? num(ks.forwardPE)),
       peg5yr: num(ks.pegRatio) ?? num(ks.trailingPegRatio),
       netMarginTtm: num(fd.profitMargins),
       grossMarginTtm: num(fd.grossMargins),
