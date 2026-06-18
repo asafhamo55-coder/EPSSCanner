@@ -85,18 +85,11 @@ export async function ingestTicker(symbol: string): Promise<IngestResult> {
   for (const r of annualRaw) annualByYear.set(r.fiscalYear, r)
   const annual = [...annualByYear.values()]
 
-  // Trailing P/E fallback: when the provider has none (negative GAAP earnings,
-  // so Yahoo reports null / FMP a negative ratio that we clamp away), derive it
-  // from price ÷ adjusted TTM EPS — the same epsActual the YoY/QoQ signals use.
-  // Gives a sensible positive P/E for near-breakeven names instead of N/A.
-  let trailingPe = val.trailingPe
-  if (trailingPe == null && val.price != null) {
-    const ttmEps = eps
-      .filter((e) => !e.isForecast && e.epsActual != null)
-      .slice(-4)
-      .reduce((sum, e) => sum + (e.epsActual as number), 0)
-    if (ttmEps > 0) trailingPe = Math.round((val.price / ttmEps) * 100) / 100
-  }
+  // Trailing P/E stays N/A for loss-makers (negative GAAP earnings). Yahoo's
+  // website P/E for such names (e.g. INTC 904.17) is built from a proprietary
+  // normalized-earnings figure that no data feed exposes, so it can't be
+  // reproduced; N/A matches the "--" Yahoo itself shows in most periods.
+  const trailingPe = val.trailingPe
 
   if (eps.length) {
     const { error } = await supabase.from('screener_quarterly_eps').upsert(
