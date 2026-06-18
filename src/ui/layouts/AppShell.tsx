@@ -122,5 +122,9 @@ export function AppShellContent({
   children: React.ReactNode
   className?: string
 }) {
-  return <main className={cn('flex-1 px-4 py-6 md:px-6 md:py-8', className)}>{children}</main>
+  return (
+    <main className={cn('mx-auto w-full max-w-[1440px] flex-1 px-4 py-6 md:px-8 md:py-8', className)}>
+      {children}
+    </main>
+  )
 }

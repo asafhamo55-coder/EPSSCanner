@@ -20,6 +20,10 @@ export function Shell({ children }: { children: React.ReactNode }) {
       </AppShellSidebar>
       <AppShellMain>
         <AppShellHeader>
+          <span className="text-sm font-bold tracking-tight md:hidden">
+            <span className="text-gradient-brand">TripleQ</span>{' '}
+            <span className="text-foreground">Group</span>
+          </span>
           <div className="ml-auto flex items-center gap-2">
             <ThemeToggle />
           </div>

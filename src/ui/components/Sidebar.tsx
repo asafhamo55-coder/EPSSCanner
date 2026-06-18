@@ -50,10 +50,10 @@ export const NavItem = React.forwardRef<HTMLAnchorElement, NavItemProps>(
       <a
         ref={ref}
         className={cn(
-          'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
+          'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all',
           active
-            ? 'bg-primary/10 text-primary'
-            : 'text-muted hover:bg-background hover:text-foreground',
+            ? 'bg-primary-soft font-semibold text-primary shadow-xs'
+            : 'text-muted hover:bg-primary-soft/60 hover:text-foreground',
           className,
         )}
         aria-current={active ? 'page' : undefined}

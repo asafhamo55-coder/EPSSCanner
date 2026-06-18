@@ -20,8 +20,13 @@ export function ScreenerSidebar() {
   return (
     <div className="flex h-full flex-col">
       <SidebarBrand>
-        <LineChart className="h-5 w-5 text-primary" />
-        <span>TripleQ Group</span>
+        <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-brand text-sm font-bold text-white shadow-sm ring-brand">
+          Q
+        </span>
+        <span className="text-base font-bold tracking-tight">
+          <span className="text-gradient-brand">TripleQ</span>{' '}
+          <span className="text-foreground">Group</span>
+        </span>
       </SidebarBrand>
       <SidebarNav>
         {NAV.map((item) => (
