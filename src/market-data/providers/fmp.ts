@@ -180,7 +180,7 @@ export class FmpProvider implements DataProvider {
 
     const price = toNum(q.price)
     const trailingPe = posPe(yahoo?.trailingPe ?? toNum(r.priceToEarningsRatioTTM))
-    const peg5yr = yahoo?.peg5yr ?? null
+    const peg5yr = posPe(yahoo?.peg5yr ?? null)
 
     // Forward P/E: derive it from price ÷ next fiscal-year consensus EPS. The
     // stable quote no longer carries `pe`/`eps`, so we pull the nearest future
