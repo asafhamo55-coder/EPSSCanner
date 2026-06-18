@@ -36,18 +36,23 @@ function cmpNum(x: number, y: number): number {
   return x < y ? -1 : x > y ? 1 : 0
 }
 
-// Company logo by ticker (FMP public image endpoint); hides itself if missing.
+// Company logo by ticker. Parqet serves logos with their own background (so
+// white wordmarks like Uber stay visible); fall back to FMP, then hide.
 function TickerLogo({ symbol }: { symbol: string }) {
-  const [failed, setFailed] = useState(false)
-  if (failed) return null
+  const sources = [
+    `https://assets.parqet.com/logos/symbol/${symbol}?format=png`,
+    `https://financialmodelingprep.com/image-stock/${symbol}.png`,
+  ]
+  const [idx, setIdx] = useState(0)
+  if (idx >= sources.length) return null
   return (
     // eslint-disable-next-line @next/next/no-img-element
     <img
-      src={`https://financialmodelingprep.com/image-stock/${symbol}.png`}
+      src={sources[idx]}
       alt=""
       loading="lazy"
-      onError={() => setFailed(true)}
-      className="h-7 w-7 shrink-0 rounded-full bg-background object-contain ring-1 ring-border"
+      onError={() => setIdx((i) => i + 1)}
+      className="h-7 w-7 shrink-0 rounded-md object-contain ring-1 ring-border"
     />
   )
 }
@@ -278,23 +283,23 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
                       <SignalChip state={r.yoyState} label={r.yoyLabel} />
                     </td>
                     <td>
-                      <span className="text-foreground">
+                      <Badge variant="neutral" size="sm">
                         {r.forwardPe != null ? `${r.forwardPe.toFixed(1)}×` : 'N/A'}
-                      </span>
+                      </Badge>
                     </td>
                     <td>
                       <SignalChip state={r.fwdState} label={r.fwdLabel} />
                     </td>
                     <td>
-                      <span
-                        className={
-                          r.peg5yr != null && r.peg5yr < 1
-                            ? 'inline-block rounded bg-[hsl(var(--pos)/0.22)] px-2 py-0.5 font-medium text-foreground'
-                            : 'text-foreground'
-                        }
-                      >
-                        {r.peg5yr != null ? r.peg5yr.toFixed(2) : 'N/A'}
-                      </span>
+                      {r.peg5yr != null ? (
+                        <Badge variant={r.peg5yr < 1 ? 'success' : 'neutral'} size="sm">
+                          {r.peg5yr.toFixed(2)}
+                        </Badge>
+                      ) : (
+                        <Badge variant="neutral" size="sm">
+                          N/A
+                        </Badge>
+                      )}
                     </td>
                     <td>
                       {r.epsCagr5yr != null ? (
@@ -308,7 +313,9 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
                           {r.epsCagr5yr < 15 ? '' : r.epsCagr5yr <= 30 ? ' · Good' : ' · Excellent'}
                         </Badge>
                       ) : (
-                        <span className="text-muted">N/A</span>
+                        <Badge variant="neutral" size="sm">
+                          N/A
+                        </Badge>
                       )}
                     </td>
                     <td onClick={(e) => e.stopPropagation()}>
