@@ -35,6 +35,22 @@ type SortKey = 'composite' | 'symbol' | 'yoyPct' | 'passing'
 function cmpNum(x: number, y: number): number {
   return x < y ? -1 : x > y ? 1 : 0
 }
+
+// Company logo by ticker (FMP public image endpoint); hides itself if missing.
+function TickerLogo({ symbol }: { symbol: string }) {
+  const [failed, setFailed] = useState(false)
+  if (failed) return null
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={`https://financialmodelingprep.com/image-stock/${symbol}.png`}
+      alt=""
+      loading="lazy"
+      onError={() => setFailed(true)}
+      className="h-7 w-7 shrink-0 rounded-full bg-background object-contain ring-1 ring-border"
+    />
+  )
+}
 // Forward-growth value (na sinks to the bottom).
 function fwdVal(r: WatchlistRow): number {
   return r.fwdState !== 'na' && r.fwdPct != null ? r.fwdPct : -Infinity
@@ -43,43 +59,18 @@ function fwdVal(r: WatchlistRow): number {
 function qoqEpsVal(r: WatchlistRow): number {
   return r.yoyState !== 'na' && r.yoyPct != null ? r.yoyPct : -Infinity
 }
-// Step-4 trend: accelerating > flat > n/a > decelerating.
-function accelRank(r: WatchlistRow): number {
-  switch (r.qoqState) {
-    case 'pass':
-      return 3
-    case 'flag':
-      return 2
-    case 'fail':
-      return 0
-    default:
-      return 1
-  }
-}
-// Fundamentals: pass < flag < fail (lower sorts first).
-function fundRank(r: WatchlistRow): number {
-  switch (r.fundState) {
-    case 'pass':
-      return 0
-    case 'flag':
-      return 1
-    case 'fail':
-      return 2
-    default:
-      return 3
-  }
+// EPS CAGR 5yr expected (na sinks to the bottom).
+function cagrVal(r: WatchlistRow): number {
+  return r.epsCagr5yr ?? -Infinity
 }
 
-// Default ordering: Score ↓, Forward(5) ↓, Accelerating first, QoQ EPS(3) ↓,
-// P/E ↑ (smallest first), then Fundamentals (pass → flag → fail).
+// Default ordering: YoY EPS(3) ↓ dominates; NTM EPS Growth ↓ then EPS CAGR
+// 5yr ↓ only break exact ties (N/A sinks to the bottom).
 function compositeCompare(a: WatchlistRow, b: WatchlistRow): number {
   return (
-    cmpNum(b.passing, a.passing) ||
-    cmpNum(fwdVal(b), fwdVal(a)) ||
-    cmpNum(accelRank(b), accelRank(a)) ||
     cmpNum(qoqEpsVal(b), qoqEpsVal(a)) ||
-    cmpNum(a.trailingPe ?? Infinity, b.trailingPe ?? Infinity) ||
-    cmpNum(fundRank(a), fundRank(b)) ||
+    cmpNum(fwdVal(b), fwdVal(a)) ||
+    cmpNum(cagrVal(b), cagrVal(a)) ||
     a.symbol.localeCompare(b.symbol)
   )
 }
@@ -251,16 +242,13 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
                 <th className="font-medium text-muted">NTM EPS Growth (%)</th>
                 <th className="font-medium text-muted">PEG (5yr exp)</th>
                 <th className="font-medium text-muted">EPS CAGR 5yr expected</th>
-                <th className="font-medium text-muted">Fundamentals (2)</th>
-                <th className="font-medium text-muted">QoQ trend (4)</th>
-                <SortHeader label="Score" k="passing" />
                 <th />
               </tr>
             </thead>
             <tbody>
               {sorted.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="px-4 py-10 text-center text-sm text-muted">
+                  <td colSpan={8} className="px-4 py-10 text-center text-sm text-muted">
                     No tickers match these filters.
                   </td>
                 </tr>
@@ -272,8 +260,13 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
                     className="cursor-pointer border-b border-border last:border-0 transition-colors hover:bg-background [&>td]:px-4 [&>td]:py-3"
                   >
                     <td>
-                      <div className="font-semibold text-foreground">{r.symbol}</div>
-                      {r.name ? <div className="text-xs text-muted">{r.name}</div> : null}
+                      <div className="flex items-center gap-3">
+                        <TickerLogo symbol={r.symbol} />
+                        <div>
+                          <div className="font-semibold text-foreground">{r.symbol}</div>
+                          {r.name ? <div className="text-xs text-muted">{r.name}</div> : null}
+                        </div>
+                      </div>
                     </td>
                     <td>
                       <SignalChip
@@ -317,17 +310,6 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
                       ) : (
                         <span className="text-muted">N/A</span>
                       )}
-                    </td>
-                    <td>
-                      <SignalChip state={r.fundState} />
-                    </td>
-                    <td>
-                      <SignalChip state={r.qoqState} label={r.qoqLabel} />
-                    </td>
-                    <td>
-                      <span className="font-medium text-foreground">
-                        {r.passing}/{r.scored}
-                      </span>
                     </td>
                     <td onClick={(e) => e.stopPropagation()}>
                       <RemoveTickerButton symbol={r.symbol} />
