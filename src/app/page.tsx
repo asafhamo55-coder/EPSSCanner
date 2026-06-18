@@ -6,6 +6,7 @@ import { pct } from '@/lib/format'
 import { AddTickerForm } from '@/components/AddTickerForm'
 import { RefreshButton } from '@/components/RefreshButton'
 import { WatchlistTable, type WatchlistRow } from '@/components/WatchlistTable'
+import { IndicesPanel } from '@/components/IndicesPanel'
 
 export const dynamic = 'force-dynamic'
 
@@ -67,6 +68,8 @@ export default async function DashboardPage() {
 
   return (
     <div className="space-y-6">
+      <IndicesPanel />
+
       <PageHeader
         title="Watchlist"
         description="Per-ticker fundamental scorecard — the 5-step EPS methodology, recomputed each refresh."

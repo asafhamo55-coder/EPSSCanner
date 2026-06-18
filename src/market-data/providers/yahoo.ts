@@ -41,7 +41,7 @@ const MODULES = [
 
 /** Yahoo numeric fields are `{ raw, fmt }` objects (or a bare number, or {}). */
 type YNum = { raw?: number } | number | null | undefined
-function num(v: YNum): number | null {
+export function num(v: YNum): number | null {
   if (v == null) return null
   if (typeof v === 'number') return Number.isFinite(v) ? v : null
   const n = v.raw
@@ -130,7 +130,7 @@ interface QuoteSummary {
   }
 }
 
-async function fetchSummary(symbol: string): Promise<QuoteSummary> {
+export async function fetchSummary(symbol: string): Promise<QuoteSummary> {
   const { cookie, crumb } = await getCreds(symbol)
   const url = new URL(`${QS_BASE}/${encodeURIComponent(symbol)}`)
   url.searchParams.set('modules', MODULES)
@@ -155,6 +155,46 @@ async function fetchSummary(symbol: string): Promise<QuoteSummary> {
   const result = json.quoteSummary?.result?.[0]
   if (!result) throw new ProviderError(`Yahoo returned no data for ${symbol}`, symbol)
   return result
+}
+
+/** Year-to-date price + return for an index/symbol, via the keyless v8 chart
+ *  endpoint. Baseline is the prior-year close (`chartPreviousClose`), falling
+ *  back to the first close in the YTD window. Used by the indices panel. */
+export async function fetchChartYtd(
+  symbol: string,
+): Promise<{ price: number | null; ytdPct: number | null }> {
+  const { cookie, crumb } = await getCreds(symbol)
+  const url = new URL(
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}`,
+  )
+  url.searchParams.set('range', 'ytd')
+  url.searchParams.set('interval', '1d')
+  url.searchParams.set('crumb', crumb)
+
+  const res = await fetch(url, {
+    headers: { 'User-Agent': UA, accept: 'application/json', ...(cookie ? { cookie } : {}) },
+  })
+  if (!res.ok) throw new ProviderError(`Yahoo chart → ${res.status}`, symbol, res.status)
+
+  const json = (await res.json()) as {
+    chart?: {
+      result?: {
+        meta?: { regularMarketPrice?: number; chartPreviousClose?: number; previousClose?: number }
+        indicators?: { quote?: { close?: (number | null)[] }[] }
+      }[]
+    }
+  }
+  const r = json.chart?.result?.[0]
+  if (!r) throw new ProviderError(`Yahoo chart returned no data for ${symbol}`, symbol)
+
+  const price = num(r.meta?.regularMarketPrice)
+  const closes = (r.indicators?.quote?.[0]?.close ?? []).filter(
+    (c): c is number => typeof c === 'number' && Number.isFinite(c),
+  )
+  const base =
+    num(r.meta?.chartPreviousClose) ?? num(r.meta?.previousClose) ?? closes[0] ?? null
+  const ytdPct = price != null && base ? ((price - base) / base) * 100 : null
+  return { price, ytdPct }
 }
 
 /** Yahoo quarter labels look like '1Q2024' → '2024Q1'. */
