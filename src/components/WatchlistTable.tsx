@@ -42,6 +42,7 @@ type SortKey =
   | 'peg5yr'
   | 'epsCagr5yr'
   | 'sma150'
+  | 'price'
 
 function cmpNum(x: number, y: number): number {
   return x < y ? -1 : x > y ? 1 : 0
@@ -68,6 +69,8 @@ function sortVal(r: WatchlistRow, key: SortKey): number {
       return r.sma150 != null && r.sma150 !== 0 && r.price != null
         ? (r.price - r.sma150) / r.sma150
         : -Infinity
+    case 'price':
+      return r.price ?? -Infinity
     default:
       return 0
   }
@@ -285,13 +288,14 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
                 <SortHeader label="PEG (5yr exp)" k="peg5yr" />
                 <SortHeader label="EPS CAGR 5yr expected" k="epsCagr5yr" />
                 <SortHeader label="SMA 150" k="sma150" />
+                <SortHeader label="Price" k="price" />
                 <th />
               </tr>
             </thead>
             <tbody>
               {sorted.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="px-4 py-10 text-center text-sm text-muted">
+                  <td colSpan={10} className="px-4 py-10 text-center text-sm text-muted">
                     No tickers match these filters.
                   </td>
                 </tr>
@@ -371,6 +375,16 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
                           N/A
                         </Badge>
                       )}
+                    </td>
+                    <td>
+                      <span className="font-semibold tabular-nums text-foreground">
+                        {r.price != null
+                          ? `$${r.price.toLocaleString(undefined, {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                            })}`
+                          : 'N/A'}
+                      </span>
                     </td>
                     <td onClick={(e) => e.stopPropagation()}>
                       <RemoveTickerButton symbol={r.symbol} />
