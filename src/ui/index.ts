@@ -55,6 +55,7 @@ export {
   AppShellMain,
   AppShellHeader,
   AppShellContent,
+  useAppShell,
 } from './layouts/AppShell'
 
 // Sidebar primitives

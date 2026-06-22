@@ -8,6 +8,7 @@ import {
   SidebarBrand,
   SidebarFooter,
   SidebarNav,
+  useAppShell,
 } from '@/ui'
 
 const NAV = [
@@ -17,16 +18,19 @@ const NAV = [
 
 export function ScreenerSidebar() {
   const pathname = usePathname()
+  const { collapsed } = useAppShell()
   return (
     <div className="flex h-full flex-col">
-      <SidebarBrand>
-        <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-brand text-sm font-bold text-white shadow-sm ring-brand">
+      <SidebarBrand className={collapsed ? 'justify-center px-0' : undefined}>
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-brand text-sm font-bold text-white shadow-sm ring-brand">
           Q
         </span>
-        <span className="text-base font-bold tracking-tight">
-          <span className="text-gradient-brand">TripleQ</span>{' '}
-          <span className="text-foreground">Group</span>
-        </span>
+        {!collapsed ? (
+          <span className="text-base font-bold tracking-tight">
+            <span className="text-gradient-brand">TripleQ</span>{' '}
+            <span className="text-foreground">Group</span>
+          </span>
+        ) : null}
       </SidebarBrand>
       <SidebarNav>
         {NAV.map((item) => (
@@ -34,16 +38,19 @@ export function ScreenerSidebar() {
             <NavItem
               icon={item.icon}
               label={item.label}
+              collapsed={collapsed}
               active={item.href === '/' ? pathname === '/' : pathname.startsWith(item.href)}
             />
           </Link>
         ))}
       </SidebarNav>
-      <SidebarFooter>
-        <p className="px-1 text-xs text-muted">
-          Fundamental signals only — not investment advice.
-        </p>
-      </SidebarFooter>
+      {!collapsed ? (
+        <SidebarFooter>
+          <p className="px-1 text-xs text-muted">
+            Fundamental signals only — not investment advice.
+          </p>
+        </SidebarFooter>
+      ) : null}
     </div>
   )
 }

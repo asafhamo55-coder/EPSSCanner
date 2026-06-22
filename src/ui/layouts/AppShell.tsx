@@ -1,21 +1,27 @@
 'use client'
 
 import * as React from 'react'
-import { Menu, X } from 'lucide-react'
+import { Menu, PanelLeftClose, PanelLeftOpen, X } from 'lucide-react'
 import { cn } from '../lib/cn'
 
 interface AppShellContextValue {
   mobileOpen: boolean
   setMobileOpen: (v: boolean) => void
+  collapsed: boolean
+  setCollapsed: (v: boolean) => void
 }
 
 const AppShellContext = React.createContext<AppShellContextValue | null>(null)
 
-function useAppShell() {
+/** Read the shell state (mobile drawer + desktop collapse). Exported so the
+ *  sidebar content can render an icon-only rail when collapsed. */
+export function useAppShell() {
   const ctx = React.useContext(AppShellContext)
   if (!ctx) throw new Error('AppShell.* must be rendered inside <AppShell>')
   return ctx
 }
+
+const COLLAPSE_KEY = 'appshell:collapsed'
 
 export function AppShell({
   children,
@@ -25,6 +31,18 @@ export function AppShell({
   className?: string
 }) {
   const [mobileOpen, setMobileOpen] = React.useState(false)
+  const [collapsed, setCollapsed] = React.useState(false)
+
+  // Restore the desktop collapse preference after mount (avoids SSR mismatch).
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return
+    setCollapsed(window.localStorage.getItem(COLLAPSE_KEY) === '1')
+  }, [])
+
+  const updateCollapsed = React.useCallback((v: boolean) => {
+    setCollapsed(v)
+    if (typeof window !== 'undefined') window.localStorage.setItem(COLLAPSE_KEY, v ? '1' : '0')
+  }, [])
 
   // Close the mobile drawer on any client-side navigation.
   React.useEffect(() => {
@@ -35,7 +53,9 @@ export function AppShell({
   }, [mobileOpen])
 
   return (
-    <AppShellContext.Provider value={{ mobileOpen, setMobileOpen }}>
+    <AppShellContext.Provider
+      value={{ mobileOpen, setMobileOpen, collapsed, setCollapsed: updateCollapsed }}
+    >
       <div className={cn('flex min-h-screen bg-background', className)}>{children}</div>
     </AppShellContext.Provider>
   )
@@ -48,7 +68,7 @@ export function AppShellSidebar({
   children: React.ReactNode
   className?: string
 }) {
-  const { mobileOpen, setMobileOpen } = useAppShell()
+  const { mobileOpen, setMobileOpen, collapsed } = useAppShell()
 
   return (
     <>
@@ -63,9 +83,11 @@ export function AppShellSidebar({
 
       <aside
         className={cn(
-          // Mobile: off-canvas drawer.
-          'fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-border bg-surface transition-transform duration-200 md:sticky md:top-0 md:h-screen md:translate-x-0',
+          // Mobile: off-canvas 64-wide drawer. Desktop: sticky rail that
+          // narrows to an icon strip when collapsed.
+          'fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-border bg-surface transition-[transform,width] duration-200 md:sticky md:top-0 md:h-screen md:translate-x-0',
           mobileOpen ? 'translate-x-0' : '-translate-x-full',
+          collapsed ? 'md:w-16' : 'md:w-64',
           className,
         )}
         aria-label="Primary navigation"
@@ -93,7 +115,7 @@ export function AppShellHeader({
   children?: React.ReactNode
   className?: string
 }) {
-  const { mobileOpen, setMobileOpen } = useAppShell()
+  const { mobileOpen, setMobileOpen, collapsed, setCollapsed } = useAppShell()
 
   return (
     <header
@@ -109,6 +131,15 @@ export function AppShellHeader({
         aria-label={mobileOpen ? 'Close navigation' : 'Open navigation'}
       >
         {mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+      </button>
+      <button
+        type="button"
+        onClick={() => setCollapsed(!collapsed)}
+        className="-ml-1 hidden rounded-md p-1 text-muted hover:bg-background md:inline-flex"
+        aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+      >
+        {collapsed ? <PanelLeftOpen className="h-5 w-5" /> : <PanelLeftClose className="h-5 w-5" />}
       </button>
       {children}
     </header>

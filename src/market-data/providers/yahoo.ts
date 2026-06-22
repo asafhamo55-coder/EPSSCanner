@@ -23,6 +23,7 @@ import { ProviderError } from '../provider'
 // engine (src/lib/signals.ts) owns those edge cases.
 
 const QS_BASE = 'https://query2.finance.yahoo.com/v10/finance/quoteSummary'
+const CHART_BASE = 'https://query1.finance.yahoo.com/v8/finance/chart'
 const CRUMB_URL = 'https://query2.finance.yahoo.com/v1/test/getcrumb'
 const COOKIE_URL = 'https://fc.yahoo.com'
 const UA =
@@ -305,6 +306,27 @@ export class YahooProvider implements DataProvider {
       roiTtm: num(fd.returnOnAssets),
       marketCap: num(p.marketCap),
     }
+  }
+
+  /** N-day simple moving average of daily closes, from Yahoo's keyless chart
+   *  endpoint (no cookie/crumb handshake needed). Returns null when fewer than
+   *  `period` valid closes are available. */
+  async getSma(symbol: string, period: number): Promise<number | null> {
+    const url = new URL(`${CHART_BASE}/${encodeURIComponent(symbol)}`)
+    url.searchParams.set('range', '1y')
+    url.searchParams.set('interval', '1d')
+    const res = await fetch(url, {
+      headers: { 'User-Agent': UA, accept: 'application/json' },
+    })
+    if (!res.ok) throw new ProviderError(`Yahoo chart → ${res.status}`, symbol, res.status)
+    const json = (await res.json()) as {
+      chart?: { result?: { indicators?: { quote?: { close?: (number | null)[] }[] } }[] }
+    }
+    const closes = json.chart?.result?.[0]?.indicators?.quote?.[0]?.close ?? []
+    const valid = closes.filter((c): c is number => typeof c === 'number' && Number.isFinite(c))
+    if (valid.length < period) return null
+    const window = valid.slice(-period)
+    return window.reduce((sum, c) => sum + c, 0) / window.length
   }
 
   async getAnnualFinancials(symbol: string, years: number): Promise<AnnualRow[]> {

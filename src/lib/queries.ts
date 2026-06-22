@@ -18,6 +18,19 @@ async function livePeg(symbol: string, yahoo: YahooProvider): Promise<number | n
   return peg
 }
 
+// Live 150-day SMA — not persisted in the snapshot table, so it's fetched from
+// Yahoo's keyless chart endpoint and cached per warm instance.
+const smaCache = new Map<string, { sma: number | null; ts: number }>()
+const SMA_TTL_MS = 6 * 60 * 60 * 1000
+
+async function liveSma150(symbol: string, yahoo: YahooProvider): Promise<number | null> {
+  const cached = smaCache.get(symbol)
+  if (cached && Date.now() - cached.ts < SMA_TTL_MS) return cached.sma
+  const sma = await yahoo.getSma(symbol, 150).catch(() => null)
+  smaCache.set(symbol, { sma, ts: Date.now() })
+  return sma
+}
+
 // Read helpers for the dashboard + ticker detail. Reads raw screener_* tables
 // and runs the SAME signals engine the ingest path / tests use, so every
 // surface agrees on the numbers. The watchlist is tiny, so the per-ticker
@@ -48,6 +61,7 @@ export interface Valuation {
   operatingMarginTtm: number | null
   roiTtm: number | null
   marketCap: number | null
+  sma150: number | null // 150-day simple moving average (live, not persisted)
 }
 
 export interface TickerData {
@@ -79,6 +93,7 @@ const EMPTY_VALUATION: Valuation = {
   operatingMarginTtm: null,
   roiTtm: null,
   marketCap: null,
+  sma150: null,
 }
 
 function strictlyIncreasing(values: Array<number | null>): boolean | null {
@@ -156,6 +171,7 @@ async function loadFor(tickerId: string) {
         operatingMarginTtm: (v.operating_margin_ttm as number | null) ?? null,
         roiTtm: (v.roi_ttm as number | null) ?? null,
         marketCap: (v.market_cap as number | null) ?? null,
+        sma150: null, // filled live in getWatchlist / getTicker
       }
     : EMPTY_VALUATION
 
@@ -183,10 +199,11 @@ export async function getWatchlist(): Promise<TickerData[]> {
     rows.map(async (row) => {
       const { eps, valuation, annual } = await loadFor(row.id)
       let val = valuation
-      if (val.peg5yr == null) {
-        const peg = await livePeg(row.symbol, yahoo)
-        if (peg != null) val = { ...val, peg5yr: peg }
-      }
+      const [peg, sma150] = await Promise.all([
+        val.peg5yr == null ? livePeg(row.symbol, yahoo) : Promise.resolve(val.peg5yr),
+        liveSma150(row.symbol, yahoo),
+      ])
+      val = { ...val, peg5yr: peg ?? val.peg5yr, sma150 }
       return assemble(row, eps, val, annual)
     }),
   )
@@ -205,9 +222,11 @@ export async function getTicker(symbol: string): Promise<TickerData | null> {
   const row = data as TickerRow
   const { eps, valuation, annual } = await loadFor(row.id)
   let val = valuation
-  if (val.peg5yr == null) {
-    const peg = await livePeg(row.symbol, new YahooProvider())
-    if (peg != null) val = { ...val, peg5yr: peg }
-  }
+  const yahoo = new YahooProvider()
+  const [peg, sma150] = await Promise.all([
+    val.peg5yr == null ? livePeg(row.symbol, yahoo) : Promise.resolve(val.peg5yr),
+    liveSma150(row.symbol, yahoo),
+  ])
+  val = { ...val, peg5yr: peg ?? val.peg5yr, sma150 }
   return assemble(row, eps, val, annual)
 }

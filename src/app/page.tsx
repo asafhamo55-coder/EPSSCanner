@@ -23,13 +23,16 @@ function toRow(t: TickerData): WatchlistRow {
   const yoyLabel =
     sc.yoy.state === 'turnaround' ? 'Turnaround' : sc.yoy.state === 'na' ? 'N/A' : pct(sc.yoy.pct)
   const qoqLabel = sc.qoq.label === 'na' ? 'N/A' : capitalize(sc.qoq.label)
-  // NTM EPS Growth (%) = trailing P/E ÷ forward P/E × 100 (no −1), e.g. MU
-  // 48.1 / 8.9 ≈ 540%. Forward P/E is Yahoo's (same value as the column).
+  // NTM EPS Growth (%) = (trailing P/E ÷ forward P/E − 1) × 100, e.g. MU
+  // 48.1 / 8.9 ≈ 5.40 → 440%. Forward P/E is Yahoo's (same value as the
+  // column). `sc.fwd.pct` already carries the (ratio − 1) × 100 growth.
   const fwdLabel =
-    sc.fwd.state === 'na' || sc.fwd.ratio == null ? 'N/A' : `${(sc.fwd.ratio * 100).toFixed(0)}%`
+    sc.fwd.state === 'na' || sc.fwd.pct == null ? 'N/A' : `${sc.fwd.pct.toFixed(0)}%`
   return {
     symbol: t.symbol,
     name: t.name,
+    price: t.valuation.price,
+    sma150: t.valuation.sma150,
     trailingPe: sc.pe.trailingPe,
     forwardPe: sc.fwd.forwardPe,
     peg5yr,

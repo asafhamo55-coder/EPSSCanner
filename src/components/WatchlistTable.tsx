@@ -11,6 +11,8 @@ import { RemoveTickerButton } from './RemoveTickerButton'
 export interface WatchlistRow {
   symbol: string
   name: string | null
+  price: number | null
+  sma150: number | null
   trailingPe: number | null
   forwardPe: number | null
   peg5yr: number | null
@@ -30,10 +32,45 @@ export interface WatchlistRow {
   scored: number
 }
 
-type SortKey = 'composite' | 'symbol' | 'yoyPct' | 'passing'
+type SortKey =
+  | 'composite'
+  | 'symbol'
+  | 'trailingPe'
+  | 'yoyPct'
+  | 'forwardPe'
+  | 'fwdPct'
+  | 'peg5yr'
+  | 'epsCagr5yr'
+  | 'sma150'
 
 function cmpNum(x: number, y: number): number {
   return x < y ? -1 : x > y ? 1 : 0
+}
+
+// Numeric sort value per column. N/A readings sink to the bottom (−Infinity)
+// regardless of direction is handled by the tiebreak; here na → −Infinity.
+function sortVal(r: WatchlistRow, key: SortKey): number {
+  switch (key) {
+    case 'trailingPe':
+      return r.trailingPe ?? -Infinity
+    case 'yoyPct':
+      return r.yoyState !== 'na' && r.yoyPct != null ? r.yoyPct : -Infinity
+    case 'forwardPe':
+      return r.forwardPe ?? -Infinity
+    case 'fwdPct':
+      return r.fwdState !== 'na' && r.fwdPct != null ? r.fwdPct : -Infinity
+    case 'peg5yr':
+      return r.peg5yr ?? -Infinity
+    case 'epsCagr5yr':
+      return r.epsCagr5yr ?? -Infinity
+    case 'sma150':
+      // Sort by how far price sits above/below the 150-day SMA.
+      return r.sma150 != null && r.sma150 !== 0 && r.price != null
+        ? (r.price - r.sma150) / r.sma150
+        : -Infinity
+    default:
+      return 0
+  }
 }
 
 // Company logo by ticker. Parqet serves logos with their own background (so
@@ -144,12 +181,12 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
   const sorted = useMemo(() => {
     if (sortKey === 'composite') return [...filtered].sort(compositeCompare)
     return [...filtered].sort((a, b) => {
-      let cmp = 0
-      if (sortKey === 'symbol') cmp = a.symbol.localeCompare(b.symbol)
-      else if (sortKey === 'yoyPct') cmp = (a.yoyPct ?? -Infinity) - (b.yoyPct ?? -Infinity)
-      else cmp = a.passing - b.passing
+      const cmp =
+        sortKey === 'symbol'
+          ? a.symbol.localeCompare(b.symbol)
+          : cmpNum(sortVal(a, sortKey), sortVal(b, sortKey))
       const ordered = dir === 'asc' ? cmp : -cmp
-      // Stable tiebreak so equal scores (e.g. all the 4/5s) stay alphabetical.
+      // Stable tiebreak so equal values stay alphabetical.
       return ordered !== 0 ? ordered : a.symbol.localeCompare(b.symbol)
     })
   }, [filtered, sortKey, dir])
@@ -241,19 +278,20 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
             <thead>
               <tr className="border-b border-border text-left [&>th]:px-4 [&>th]:py-3">
                 <SortHeader label="Ticker" k="symbol" />
-                <th className="font-medium text-muted">Trailing P/E (1)</th>
+                <SortHeader label="Trailing P/E (1)" k="trailingPe" />
                 <SortHeader label="YoY EPS (3)" k="yoyPct" />
-                <th className="font-medium text-muted">Forward P/E</th>
-                <th className="font-medium text-muted">NTM EPS Growth (%)</th>
-                <th className="font-medium text-muted">PEG (5yr exp)</th>
-                <th className="font-medium text-muted">EPS CAGR 5yr expected</th>
+                <SortHeader label="Forward P/E" k="forwardPe" />
+                <SortHeader label="NTM EPS Growth (%)" k="fwdPct" />
+                <SortHeader label="PEG (5yr exp)" k="peg5yr" />
+                <SortHeader label="EPS CAGR 5yr expected" k="epsCagr5yr" />
+                <SortHeader label="SMA 150" k="sma150" />
                 <th />
               </tr>
             </thead>
             <tbody>
               {sorted.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-4 py-10 text-center text-sm text-muted">
+                  <td colSpan={9} className="px-4 py-10 text-center text-sm text-muted">
                     No tickers match these filters.
                   </td>
                 </tr>
@@ -312,6 +350,22 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
                           {r.epsCagr5yr.toFixed(1)}%
                           {r.epsCagr5yr < 15 ? '' : r.epsCagr5yr <= 30 ? ' · Good' : ' · Excellent'}
                         </Badge>
+                      ) : (
+                        <Badge variant="neutral" size="sm">
+                          N/A
+                        </Badge>
+                      )}
+                    </td>
+                    <td>
+                      {r.sma150 != null ? (
+                        <div className="flex items-center gap-2">
+                          <span className="tabular-nums text-muted">{r.sma150.toFixed(2)}</span>
+                          {r.price != null ? (
+                            <Badge variant={r.price >= r.sma150 ? 'success' : 'destructive'} size="sm">
+                              {r.price >= r.sma150 ? 'Above' : 'Below'}
+                            </Badge>
+                          ) : null}
+                        </div>
                       ) : (
                         <Badge variant="neutral" size="sm">
                           N/A

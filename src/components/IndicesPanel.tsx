@@ -9,9 +9,9 @@ const ACCENT_DOT: Record<Accent, string> = {
   sky: 'bg-sky-500',
 }
 
-/** Key-indices comparison rendered as one slim strip at the top of the
- *  dashboard. YTD + P/E are live (Yahoo); EPS-growth figures are maintained
- *  estimates. Kept deliberately compact to minimise vertical space. */
+/** Key-indices comparison rendered as a strip at the top of the dashboard.
+ *  YTD + P/E are live (Yahoo); EPS-growth figures are maintained estimates.
+ *  Sized for at-a-glance readability without dominating the page. */
 export async function IndicesPanel() {
   const indices = await getIndices()
 
@@ -21,18 +21,20 @@ export async function IndicesPanel() {
         {indices.map((d) => {
           const up = d.ytdPct != null && d.ytdPct >= 0
           return (
-            <div key={d.key} className="flex-1 whitespace-nowrap px-4 py-2.5">
+            <div key={d.key} className="flex-1 whitespace-nowrap px-5 py-3.5">
               <div className="flex items-center gap-2">
-                <span className={`h-2 w-2 shrink-0 rounded-full ${ACCENT_DOT[d.accent]}`} />
-                <span className="text-sm font-semibold text-foreground">{d.name}</span>
+                <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${ACCENT_DOT[d.accent]}`} />
+                <span className="text-base font-semibold text-foreground">{d.name}</span>
+              </div>
+              <div className="mt-1 flex items-baseline gap-1.5">
                 <span
-                  className={`text-sm font-bold tabular-nums ${up ? 'text-emerald-600' : 'text-red-600'}`}
+                  className={`text-2xl font-bold tabular-nums ${up ? 'text-emerald-600' : 'text-red-600'}`}
                 >
                   {pct(d.ytdPct)}
                 </span>
-                <span className="text-[11px] text-muted">YTD</span>
+                <span className="text-xs font-medium text-muted">YTD</span>
               </div>
-              <div className="mt-0.5 text-[11px] tabular-nums text-muted">
+              <div className="mt-1.5 text-xs tabular-nums text-muted">
                 P/E {ratio(d.trailingPe, 1)} · Fwd {ratio(d.forwardPe, 1)} · EPS ’26 {d.eps2026} · ’27{' '}
                 {d.eps2027}
               </div>

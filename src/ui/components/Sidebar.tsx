@@ -39,31 +39,41 @@ export interface NavItemProps extends React.AnchorHTMLAttributes<HTMLAnchorEleme
   label: string
   badge?: React.ReactNode
   active?: boolean
+  /** Icon-only rail mode — hides the label/badge and centers the icon. */
+  collapsed?: boolean
 }
 
 // Renders an <a> so it works both with framework Links (asChild-style via
 // rendering a child) and plain hrefs. App code typically wraps it in a
 // next/link <Link>.
 export const NavItem = React.forwardRef<HTMLAnchorElement, NavItemProps>(
-  ({ icon, label, badge, active, className, children, ...props }, ref) => (
+  ({ icon, label, badge, active, collapsed, className, children, ...props }, ref) => (
     <li>
       <a
         ref={ref}
         className={cn(
           'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all',
+          collapsed && 'justify-center px-2',
           active
             ? 'bg-primary-soft font-semibold text-primary shadow-xs'
             : 'text-muted hover:bg-primary-soft/60 hover:text-foreground',
           className,
         )}
         aria-current={active ? 'page' : undefined}
+        title={collapsed ? label : undefined}
         {...props}
       >
         {icon ? <span className="flex h-5 w-5 shrink-0 items-center justify-center">{icon}</span> : null}
-        <span className="flex-1 truncate">{label}</span>
-        {badge !== undefined && badge !== null ? (
-          <span className="shrink-0 text-xs">{badge}</span>
-        ) : null}
+        {collapsed ? (
+          <span className="sr-only">{label}</span>
+        ) : (
+          <>
+            <span className="flex-1 truncate">{label}</span>
+            {badge !== undefined && badge !== null ? (
+              <span className="shrink-0 text-xs">{badge}</span>
+            ) : null}
+          </>
+        )}
         {children}
       </a>
     </li>
