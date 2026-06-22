@@ -42,10 +42,17 @@ type SortKey =
   | 'peg5yr'
   | 'epsCagr5yr'
   | 'sma150'
+  | 'vsSma150'
   | 'price'
 
 function cmpNum(x: number, y: number): number {
   return x < y ? -1 : x > y ? 1 : 0
+}
+
+// Percent the current price sits above (+) or below (−) its 150-day SMA.
+function vsSma150Pct(r: WatchlistRow): number | null {
+  if (r.sma150 == null || r.sma150 === 0 || r.price == null) return null
+  return ((r.price - r.sma150) / r.sma150) * 100
 }
 
 // Numeric sort value per column. N/A readings sink to the bottom (−Infinity)
@@ -65,10 +72,9 @@ function sortVal(r: WatchlistRow, key: SortKey): number {
     case 'epsCagr5yr':
       return r.epsCagr5yr ?? -Infinity
     case 'sma150':
+    case 'vsSma150':
       // Sort by how far price sits above/below the 150-day SMA.
-      return r.sma150 != null && r.sma150 !== 0 && r.price != null
-        ? (r.price - r.sma150) / r.sma150
-        : -Infinity
+      return vsSma150Pct(r) ?? -Infinity
     case 'price':
       return r.price ?? -Infinity
     default:
@@ -288,6 +294,7 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
                 <SortHeader label="PEG (5yr exp)" k="peg5yr" />
                 <SortHeader label="EPS CAGR 5yr expected" k="epsCagr5yr" />
                 <SortHeader label="SMA 150" k="sma150" />
+                <SortHeader label="% vs SMA 150" k="vsSma150" />
                 <SortHeader label="Price" k="price" />
                 <th />
               </tr>
@@ -295,7 +302,7 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
             <tbody>
               {sorted.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="px-4 py-10 text-center text-sm text-muted">
+                  <td colSpan={11} className="px-4 py-10 text-center text-sm text-muted">
                     No tickers match these filters.
                   </td>
                 </tr>
@@ -375,6 +382,28 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
                           N/A
                         </Badge>
                       )}
+                    </td>
+                    <td>
+                      {(() => {
+                        const v = vsSma150Pct(r)
+                        if (v == null)
+                          return (
+                            <Badge variant="neutral" size="sm">
+                              N/A
+                            </Badge>
+                          )
+                        return (
+                          <span
+                            className={
+                              'font-semibold tabular-nums ' +
+                              (v >= 0 ? 'text-emerald-600' : 'text-red-600')
+                            }
+                          >
+                            {v >= 0 ? '+' : ''}
+                            {v.toFixed(1)}%
+                          </span>
+                        )
+                      })()}
                     </td>
                     <td>
                       <span className="font-semibold tabular-nums text-foreground">
