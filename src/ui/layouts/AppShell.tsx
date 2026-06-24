@@ -31,12 +31,14 @@ export function AppShell({
   className?: string
 }) {
   const [mobileOpen, setMobileOpen] = React.useState(false)
-  const [collapsed, setCollapsed] = React.useState(false)
+  // Default to a collapsed (icon-only) sidebar; an explicit preference wins.
+  const [collapsed, setCollapsed] = React.useState(true)
 
   // Restore the desktop collapse preference after mount (avoids SSR mismatch).
   React.useEffect(() => {
     if (typeof window === 'undefined') return
-    setCollapsed(window.localStorage.getItem(COLLAPSE_KEY) === '1')
+    const stored = window.localStorage.getItem(COLLAPSE_KEY)
+    setCollapsed(stored == null ? true : stored === '1')
   }, [])
 
   const updateCollapsed = React.useCallback((v: boolean) => {
