@@ -282,10 +282,12 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
       </div>
 
       <Card className="overflow-hidden">
-        <div className="overflow-x-auto">
+        {/* Scroll the table within its own region (capped to the viewport) so
+            the header row can stay frozen at the top as you scroll the data. */}
+        <div className="max-h-[calc(100vh-6rem)] overflow-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-border text-left [&>th]:px-4 [&>th]:py-3">
+              <tr className="text-left [&>th]:sticky [&>th]:top-0 [&>th]:z-10 [&>th]:border-b [&>th]:border-border [&>th]:bg-surface [&>th]:px-4 [&>th]:py-3">
                 <SortHeader label="Ticker" k="symbol" />
                 <SortHeader label="Trailing P/E (1)" k="trailingPe" />
                 <SortHeader label="YoY EPS (3)" k="yoyPct" />
