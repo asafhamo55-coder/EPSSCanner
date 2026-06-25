@@ -167,17 +167,17 @@ export function Scorecard({ data }: { data: TickerData }) {
         <KeyValue label="Implied growth" value={sc.fwd.state === 'na' ? '—' : pct(sc.fwd.pct)} />
       </StepCard>
 
-      <Card className="bg-background/40">
+      <Card className="border-0 bg-gradient-brand text-white shadow-lg">
         <CardHeader className="pb-3">
-          <p className="text-xs uppercase tracking-wide text-muted">Composite</p>
-          <h3 className="text-base font-semibold leading-tight">Signals passing</h3>
+          <p className="text-xs uppercase tracking-wide text-white/70">Composite</p>
+          <h3 className="text-base font-semibold leading-tight text-white">Signals passing</h3>
         </CardHeader>
         <CardContent>
-          <p className="text-3xl font-bold text-foreground">
+          <p className="text-4xl font-bold text-white">
             {sc.passing}
-            <span className="text-lg font-medium text-muted">/{sc.scored}</span>
+            <span className="text-lg font-medium text-white/70">/{sc.scored}</span>
           </p>
-          <p className="mt-1 text-sm text-muted">
+          <p className="mt-1 text-sm text-white/80">
             Signals shown for your own judgment — not a buy/avoid verdict.
           </p>
         </CardContent>

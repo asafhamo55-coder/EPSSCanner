@@ -163,18 +163,21 @@ export default async function TickerPage({
             <CardContent className="px-0">
               {data.annual.length ? (
                 <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
+                  <table className="w-full text-sm tabular-nums">
                     <thead>
-                      <tr className="border-b border-border text-left text-muted [&>th]:px-6 [&>th]:py-2">
-                        <th className="font-medium">Fiscal year</th>
-                        <th className="font-medium">Revenue</th>
-                        <th className="font-medium">Net income</th>
+                      <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted [&>th]:px-6 [&>th]:py-2.5">
+                        <th className="font-semibold">Fiscal year</th>
+                        <th className="font-semibold">Revenue</th>
+                        <th className="font-semibold">Net income</th>
                       </tr>
                     </thead>
                     <tbody>
                       {data.annual.map((a) => (
-                        <tr key={a.fiscalYear} className="border-b border-border last:border-0 [&>td]:px-6 [&>td]:py-2">
-                          <td className="font-medium text-foreground">{a.fiscalYear}</td>
+                        <tr
+                          key={a.fiscalYear}
+                          className="border-b border-border transition-colors last:border-0 hover:bg-primary-soft/40 [&>td]:px-6 [&>td]:py-2.5"
+                        >
+                          <td className="font-semibold text-foreground">{a.fiscalYear}</td>
                           <td>{bigUsd(a.revenue)}</td>
                           <td>{bigUsd(a.netIncome)}</td>
                         </tr>
