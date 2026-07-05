@@ -8,13 +8,15 @@ const badgeVariants = cva(
     variants: {
       variant: {
         default: 'border-transparent bg-primary text-primary-fg',
-        success: 'border-transparent bg-emerald-100 text-emerald-800',
-        warning: 'border-transparent bg-amber-100 text-amber-800',
-        destructive: 'border-transparent bg-red-100 text-red-800',
-        info: 'border-transparent bg-sky-100 text-sky-800',
-        neutral: 'border-transparent bg-slate-100 text-slate-700',
+        // Semantic tones are font-color only (no fill) so the color coding
+        // reads as colored text, matching the "% vs SMA 150" column.
+        success: 'border-transparent text-emerald-600 dark:text-emerald-400',
+        warning: 'border-transparent text-amber-600 dark:text-amber-400',
+        destructive: 'border-transparent text-red-600 dark:text-red-400',
+        info: 'border-transparent text-sky-600 dark:text-sky-400',
+        neutral: 'border-transparent text-muted',
         // AI-generated content. Matches the Sparkles icon family used for AI affordances.
-        ai: 'border-transparent bg-amber-100 text-amber-800',
+        ai: 'border-transparent text-amber-600 dark:text-amber-400',
         outline: 'border-border bg-transparent',
       },
       size: {

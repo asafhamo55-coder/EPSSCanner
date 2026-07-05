@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { type MouseEvent, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { ArrowDown, ArrowUp, Search, X } from 'lucide-react'
 import { Badge, Card } from '@/ui'
@@ -133,6 +133,24 @@ const TOGGLES: { key: string; label: string; test: (r: WatchlistRow) => boolean 
   { key: 'accel', label: 'Accelerating', test: (r) => r.qoqLabel === 'Accelerating' },
   { key: 'qoqpos', label: 'Positive YoY EPS', test: (r) => r.yoyState !== 'na' && (r.yoyPct ?? 0) > 0 },
   { key: 'fwd', label: 'Forward growth', test: (r) => r.fwdState !== 'na' && (r.fwdPct ?? 0) > 0 },
+  {
+    key: 'nearsma150',
+    label: 'Near SMA 150 (±5%)',
+    test: (r) => {
+      const v = vsSma150Pct(r)
+      return v != null && Math.abs(v) <= 5
+    },
+  },
+  {
+    key: 'yoyltfwd',
+    label: 'YoY EPS < NTM growth',
+    test: (r) =>
+      r.yoyState !== 'na' &&
+      r.yoyPct != null &&
+      r.fwdState !== 'na' &&
+      r.fwdPct != null &&
+      r.yoyPct < r.fwdPct,
+  },
 ]
 
 const MIN_SCORES = [
@@ -142,6 +160,28 @@ const MIN_SCORES = [
   { label: '5 / 5', value: 5 },
 ]
 
+// Simple Hebrew explanation per column — shown on hover of the header title.
+const COLUMN_HELP: Partial<Record<SortKey, string>> = {
+  symbol: 'סימול המניה של החברה בבורסה.',
+  trailingPe:
+    'מכפיל רווח נגרר: מחיר המניה חלקי הרווח למניה ב-12 החודשים האחרונים. ככל שנמוך יותר – המניה זולה יותר ביחס לרווח.',
+  yoyPct: 'צמיחת הרווח למניה ברבעון האחרון בהשוואה לאותו רבעון לפני שנה (שנה מול שנה).',
+  forwardPe: 'מכפיל רווח עתידי: מחיר המניה חלקי תחזית הרווח למניה ל-12 החודשים הקרובים.',
+  fwdPct:
+    'אחוז הצמיחה הצפוי ברווח למניה בשנה הקרובה. נגזר מהיחס בין המכפיל הנגרר למכפיל העתידי.',
+  peg5yr:
+    'יחס PEG: מכפיל הרווח חלקי הצמיחה השנתית הצפויה ל-5 שנים. ערך מתחת ל-1 נחשב תמחור אטרקטיבי.',
+  epsCagr5yr:
+    'קצב הצמיחה השנתי הממוצע הצפוי ברווח למניה ל-5 השנים הבאות (מחושב ממכפיל הרווח חלקי ה-PEG).',
+  sma150:
+    'ממוצע נע של מחיר המניה על פני 150 ימי מסחר. "מעל"/"מתחת" מציין היכן המחיר הנוכחי ביחס אליו.',
+  vsSma150: 'בכמה אחוזים המחיר הנוכחי גבוה (+) או נמוך (−) מהממוצע הנע ל-150 יום.',
+  price: 'מחיר המניה העדכני (אחרון ידוע).',
+}
+
+// Approx. tooltip width (matches max-w below) — used to keep it on-screen.
+const TIP_WIDTH = 320
+
 export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
   const router = useRouter()
   const [sortKey, setSortKey] = useState<SortKey>('composite')
@@ -150,6 +190,15 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
   const [query, setQuery] = useState('')
   const [minScore, setMinScore] = useState(0)
   const [active, setActive] = useState<Set<string>>(new Set())
+
+  // Hover help tooltip (Hebrew). Positioned with viewport coords so it isn't
+  // clipped by the sticky, overflow-auto table container.
+  const [tip, setTip] = useState<{ text: string; x: number; y: number } | null>(null)
+  function showTip(e: MouseEvent<HTMLElement>, text: string) {
+    const r = e.currentTarget.getBoundingClientRect()
+    const x = Math.max(8, Math.min(r.left, window.innerWidth - TIP_WIDTH - 8))
+    setTip({ text, x, y: r.bottom + 6 })
+  }
 
   function toggle(key: SortKey) {
     if (key === sortKey) setDir(dir === 'asc' ? 'desc' : 'asc')
@@ -200,20 +249,25 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
     })
   }, [filtered, sortKey, dir])
 
-  const SortHeader = ({ label, k, className }: { label: string; k: SortKey; className?: string }) => (
-    <th className={className}>
-      <button
-        type="button"
-        onClick={() => toggle(k)}
-        className="inline-flex items-center gap-1 font-medium text-muted hover:text-foreground"
-      >
-        {label}
-        {sortKey === k ? (
-          dir === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
-        ) : null}
-      </button>
-    </th>
-  )
+  const SortHeader = ({ label, k, className }: { label: string; k: SortKey; className?: string }) => {
+    const help = COLUMN_HELP[k]
+    return (
+      <th className={className}>
+        <button
+          type="button"
+          onClick={() => toggle(k)}
+          onMouseEnter={help ? (e) => showTip(e, help) : undefined}
+          onMouseLeave={help ? () => setTip(null) : undefined}
+          className="inline-flex items-center gap-1 font-medium text-muted hover:text-foreground"
+        >
+          {label}
+          {sortKey === k ? (
+            dir === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+          ) : null}
+        </button>
+      </th>
+    )
+  }
 
   return (
     <div className="space-y-3">
@@ -287,17 +341,35 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
         <div className="max-h-[calc(100vh-6rem)] overflow-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="text-left [&>th]:sticky [&>th]:top-0 [&>th]:z-10 [&>th]:border-b [&>th]:border-border [&>th]:bg-surface [&>th]:px-4 [&>th]:py-3">
+              {/* Grouping band — spans the columns beneath each time horizon. */}
+              <tr className="[&>th]:sticky [&>th]:top-0 [&>th]:z-10 [&>th]:h-8 [&>th]:bg-surface [&>th]:px-4 [&>th]:text-center [&>th]:text-[11px] [&>th]:font-semibold [&>th]:uppercase [&>th]:tracking-wide [&>th]:text-muted">
+                <th aria-hidden />
+                <th colSpan={2} className="border-l border-border">
+                  Last year performance
+                </th>
+                <th colSpan={2} className="border-l border-border">
+                  Next year performance
+                </th>
+                <th colSpan={2} className="border-l border-border">
+                  Next 5 years performance
+                </th>
+                <th colSpan={2} className="border-l border-border">
+                  150 SMA indicator
+                </th>
+                <th className="border-l border-border" />
+                <th />
+              </tr>
+              <tr className="text-left [&>th]:sticky [&>th]:top-8 [&>th]:z-10 [&>th]:border-b [&>th]:border-border [&>th]:bg-surface [&>th]:px-4 [&>th]:py-3">
                 <SortHeader label="Ticker" k="symbol" />
-                <SortHeader label="Trailing P/E (1)" k="trailingPe" />
+                <SortHeader label="Trailing P/E (1)" k="trailingPe" className="border-l border-border" />
                 <SortHeader label="YoY EPS (3)" k="yoyPct" />
-                <SortHeader label="Forward P/E" k="forwardPe" />
+                <SortHeader label="Forward P/E" k="forwardPe" className="border-l border-border" />
                 <SortHeader label="NTM EPS Growth (%)" k="fwdPct" />
-                <SortHeader label="PEG (5yr exp)" k="peg5yr" />
+                <SortHeader label="PEG (5yr exp)" k="peg5yr" className="border-l border-border" />
                 <SortHeader label="EPS CAGR 5yr expected" k="epsCagr5yr" />
-                <SortHeader label="SMA 150" k="sma150" />
+                <SortHeader label="SMA 150" k="sma150" className="border-l border-border" />
                 <SortHeader label="% vs SMA 150" k="vsSma150" />
-                <SortHeader label="Price" k="price" />
+                <SortHeader label="Price" k="price" className="border-l border-border" />
                 <th />
               </tr>
             </thead>
@@ -427,6 +499,17 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
           </table>
         </div>
       </Card>
+
+      {/* Hebrew help tooltip — fixed to the viewport so it never gets clipped. */}
+      {tip ? (
+        <div
+          dir="rtl"
+          style={{ position: 'fixed', left: tip.x, top: tip.y, width: TIP_WIDTH }}
+          className="pointer-events-none z-50 rounded-lg border border-border bg-surface px-3 py-2 text-right text-xs leading-relaxed text-foreground shadow-lg"
+        >
+          {tip.text}
+        </div>
+      ) : null}
     </div>
   )
 }
