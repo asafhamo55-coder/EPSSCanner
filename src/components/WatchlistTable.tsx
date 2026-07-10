@@ -1,6 +1,6 @@
 'use client'
 
-import { type MouseEvent, useMemo, useState } from 'react'
+import { type MouseEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { ArrowDown, ArrowUp, Search, X } from 'lucide-react'
 import { Badge, Card } from '@/ui'
@@ -173,6 +173,31 @@ const MIN_SCORES = [
   { label: '5 / 5', value: 5 },
 ]
 
+// Sort options surfaced as a dropdown on mobile, where the table's clickable
+// column headers aren't visible.
+const MOBILE_SORTS: { label: string; key: SortKey }[] = [
+  { label: 'Best match', key: 'composite' },
+  { label: 'YoY EPS', key: 'yoyPct' },
+  { label: 'NTM EPS growth', key: 'fwdPct' },
+  { label: 'PEG (5yr exp)', key: 'peg5yr' },
+  { label: 'EPS CAGR 5yr', key: 'epsCagr5yr' },
+  { label: '% vs SMA 150', key: 'vsSma150' },
+  { label: 'Market cap', key: 'marketCap' },
+  { label: '% ATH', key: 'pctFromAth' },
+  { label: 'Price', key: 'price' },
+  { label: 'Ticker', key: 'symbol' },
+]
+
+// One labelled metric inside a mobile card. Value may be plain text or a chip.
+function MobileStat({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="min-w-0">
+      <div className="text-[11px] uppercase tracking-wide text-muted">{label}</div>
+      <div className="mt-0.5 text-sm font-semibold tabular-nums text-foreground">{children}</div>
+    </div>
+  )
+}
+
 // Simple Hebrew explanation per column — shown on hover of the header title.
 const COLUMN_HELP: Partial<Record<SortKey, string>> = {
   symbol: 'סימול המניה של החברה בבורסה.',
@@ -198,6 +223,9 @@ const COLUMN_HELP: Partial<Record<SortKey, string>> = {
 
 // Approx. tooltip width (matches max-w below) — used to keep it on-screen.
 const TIP_WIDTH = 320
+// Auto-dismiss the help tooltip after this long so it can never linger on
+// screen — sort/hover re-renders can drop the mouseleave that would hide it.
+const TIP_TTL_MS = 3000
 
 export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
   const router = useRouter()
@@ -211,11 +239,26 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
   // Hover help tooltip (Hebrew). Positioned with viewport coords so it isn't
   // clipped by the sticky, overflow-auto table container.
   const [tip, setTip] = useState<{ text: string; x: number; y: number } | null>(null)
+  const tipTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  function clearTipTimer() {
+    if (tipTimer.current) {
+      clearTimeout(tipTimer.current)
+      tipTimer.current = null
+    }
+  }
   function showTip(e: MouseEvent<HTMLElement>, text: string) {
     const r = e.currentTarget.getBoundingClientRect()
     const x = Math.max(8, Math.min(r.left, window.innerWidth - TIP_WIDTH - 8))
+    clearTipTimer()
     setTip({ text, x, y: r.bottom + 6 })
+    tipTimer.current = setTimeout(() => setTip(null), TIP_TTL_MS)
   }
+  function hideTip() {
+    clearTipTimer()
+    setTip(null)
+  }
+  // Belt-and-suspenders: clear any pending timer on unmount.
+  useEffect(() => clearTipTimer, [])
 
   function toggle(key: SortKey) {
     if (key === sortKey) setDir(dir === 'asc' ? 'desc' : 'asc')
@@ -223,6 +266,12 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
       setSortKey(key)
       setDir(key === 'symbol' ? 'asc' : 'desc')
     }
+  }
+
+  // Pick a sort column outright (mobile dropdown) with a sensible direction.
+  function chooseSort(key: SortKey) {
+    setSortKey(key)
+    setDir(key === 'symbol' ? 'asc' : 'desc')
   }
 
   function toggleChip(key: string) {
@@ -274,7 +323,7 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
           type="button"
           onClick={() => toggle(k)}
           onMouseEnter={help ? (e) => showTip(e, help) : undefined}
-          onMouseLeave={help ? () => setTip(null) : undefined}
+          onMouseLeave={help ? hideTip : undefined}
           className="inline-flex items-center gap-1 font-medium text-muted hover:text-foreground"
         >
           {label}
@@ -290,21 +339,35 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
     <div className="space-y-3">
       {/* Filter bar */}
       <div className="flex flex-wrap items-center gap-2">
-        <div className="relative">
+        <div className="relative w-full sm:w-56">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
           <input
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search ticker or name…"
-            className="h-9 w-56 rounded-lg border border-border bg-surface pl-8 pr-3 text-sm text-foreground placeholder:text-muted focus:border-primary focus:outline-none"
+            className="h-10 w-full rounded-lg border border-border bg-surface pl-8 pr-3 text-sm text-foreground placeholder:text-muted focus:border-primary focus:outline-none sm:h-9"
           />
         </div>
+
+        {/* Sort picker — only useful on mobile, where column headers are hidden. */}
+        <select
+          value={sortKey}
+          onChange={(e) => chooseSort(e.target.value as SortKey)}
+          className="h-10 flex-1 rounded-lg border border-border bg-surface px-3 text-sm text-foreground focus:border-primary focus:outline-none sm:h-9 md:hidden"
+          aria-label="Sort by"
+        >
+          {MOBILE_SORTS.map((s) => (
+            <option key={s.key} value={s.key}>
+              Sort: {s.label}
+            </option>
+          ))}
+        </select>
 
         <select
           value={minScore}
           onChange={(e) => setMinScore(Number(e.target.value))}
-          className="h-9 rounded-lg border border-border bg-surface px-3 text-sm text-foreground focus:border-primary focus:outline-none"
+          className="h-10 rounded-lg border border-border bg-surface px-3 text-sm text-foreground focus:border-primary focus:outline-none sm:h-9"
           aria-label="Minimum score"
         >
           {MIN_SCORES.map((m) => (
@@ -352,7 +415,9 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
         </span>
       </div>
 
-      <Card className="overflow-hidden">
+      {/* Desktop / tablet: the full sortable table. Hidden on phones, where the
+          14 columns are unreadable — the card list below takes over there. */}
+      <Card className="hidden overflow-hidden md:block">
         {/* Scroll the table within its own region (capped to the viewport) so
             the header row can stay frozen at the top as you scroll the data. */}
         <div className="max-h-[calc(100vh-6rem)] overflow-auto">
@@ -551,6 +616,85 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
           </table>
         </div>
       </Card>
+
+      {/* Phone: one tappable card per ticker — the essentials only, no sideways
+          scroll. Shares the same filtered/sorted list as the table above. */}
+      <div className="space-y-2.5 md:hidden">
+        {sorted.length === 0 ? (
+          <Card className="px-4 py-10 text-center text-sm text-muted">
+            No tickers match these filters.
+          </Card>
+        ) : (
+          sorted.map((r) => {
+            const ath = r.pctFromAth
+            return (
+              <Card
+                key={r.symbol}
+                onClick={() => router.push(`/ticker/${r.symbol}`)}
+                className="cursor-pointer p-3.5 transition-colors active:bg-background"
+              >
+                <div className="flex items-center gap-3">
+                  <TickerLogo symbol={r.symbol} />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-foreground">{r.symbol}</span>
+                      <Badge
+                        variant={r.passing >= 4 ? 'success' : r.passing >= 3 ? 'warning' : 'neutral'}
+                        size="sm"
+                      >
+                        {r.passing}/{r.scored}
+                      </Badge>
+                    </div>
+                    {r.name ? <div className="truncate text-xs text-muted">{r.name}</div> : null}
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <div className="font-semibold tabular-nums text-foreground">
+                      {r.price != null
+                        ? `$${r.price.toLocaleString(undefined, {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          })}`
+                        : 'N/A'}
+                    </div>
+                    <div className="text-[11px] tabular-nums text-muted">{bigUsd(r.marketCap)}</div>
+                  </div>
+                  <div className="-mr-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+                    <RemoveTickerButton symbol={r.symbol} />
+                  </div>
+                </div>
+
+                <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2.5 border-t border-border pt-3">
+                  <MobileStat label="YoY EPS (3)">
+                    <SignalChip state={r.yoyState} label={r.yoyLabel} />
+                  </MobileStat>
+                  <MobileStat label="NTM EPS growth">
+                    <SignalChip state={r.fwdState} label={r.fwdLabel} />
+                  </MobileStat>
+                  <MobileStat label="PEG (5yr exp)">
+                    <span className={r.peg5yr != null && r.peg5yr < 1 ? 'text-emerald-600' : undefined}>
+                      {r.peg5yr != null ? r.peg5yr.toFixed(2) : 'N/A'}
+                    </span>
+                  </MobileStat>
+                  <MobileStat label="% ATH">
+                    {ath == null ? (
+                      'N/A'
+                    ) : (
+                      <span
+                        className={
+                          ath >= -5 ? 'text-emerald-600' : ath >= -20 ? 'text-amber-600' : 'text-red-600'
+                        }
+                      >
+                        {ath >= 0 ? '+' : ''}
+                        {ath.toFixed(1)}%
+                      </span>
+                    )}
+                  </MobileStat>
+                </div>
+              </Card>
+            )
+          })
+        )}
+      </div>
 
       {/* Hebrew help tooltip — fixed to the viewport so it never gets clipped. */}
       {tip ? (

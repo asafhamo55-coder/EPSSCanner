@@ -122,7 +122,10 @@ export function AppShellHeader({
   return (
     <header
       className={cn(
-        'sticky top-0 z-20 flex h-14 items-center gap-3 border-b border-border bg-surface/80 px-4 backdrop-blur md:px-6',
+        // Pad the top for the iOS status-bar/notch inset when installed to the
+        // home screen (0 in a normal browser tab), and the sides for landscape.
+        'sticky top-0 z-20 flex min-h-14 items-center gap-3 border-b border-border bg-surface/80 backdrop-blur',
+        'pt-[env(safe-area-inset-top)] pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] md:px-6',
         className,
       )}
     >
@@ -156,7 +159,14 @@ export function AppShellContent({
   className?: string
 }) {
   return (
-    <main className={cn('mx-auto w-full flex-1 px-4 py-6 md:px-8 md:py-8', className)}>
+    <main
+      className={cn(
+        'mx-auto w-full flex-1 px-4 pt-6 md:px-8 md:py-8',
+        // Clear the iOS home indicator at the bottom on phones.
+        'pb-[max(1.5rem,env(safe-area-inset-bottom))]',
+        className,
+      )}
+    >
       {children}
     </main>
   )

@@ -76,7 +76,7 @@ export default async function DashboardPage() {
         title="Watchlist"
         description="Per-ticker fundamental scorecard — the 5-step EPS methodology, recomputed each refresh."
         actions={
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
             <AddTickerForm />
             {total > 0 ? <RefreshButton /> : null}
           </div>

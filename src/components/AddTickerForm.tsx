@@ -28,17 +28,17 @@ export function AddTickerForm() {
   }
 
   return (
-    <form onSubmit={submit} className="flex items-center gap-2">
+    <form onSubmit={submit} className="flex w-full items-center gap-2 sm:w-auto">
       <Input
         value={symbol}
         onChange={(e) => setSymbol(e.target.value.toUpperCase())}
         placeholder="Add ticker (e.g. AAPL)"
         aria-label="Ticker symbol"
-        className="w-44"
+        className="w-full sm:w-44"
         maxLength={10}
         disabled={pending}
       />
-      <Button type="submit" loading={pending} aria-label="Add ticker">
+      <Button type="submit" loading={pending} aria-label="Add ticker" className="shrink-0">
         <Plus className="h-4 w-4" />
         Add
       </Button>
