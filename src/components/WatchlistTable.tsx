@@ -1,6 +1,6 @@
 'use client'
 
-import { type MouseEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import { type MouseEvent, type ReactNode, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { ArrowDown, ArrowUp, Search, X } from 'lucide-react'
 import { Badge, Card } from '@/ui'
@@ -223,9 +223,6 @@ const COLUMN_HELP: Partial<Record<SortKey, string>> = {
 
 // Approx. tooltip width (matches max-w below) — used to keep it on-screen.
 const TIP_WIDTH = 320
-// Auto-dismiss the help tooltip after this long so it can never linger on
-// screen — sort/hover re-renders can drop the mouseleave that would hide it.
-const TIP_TTL_MS = 3000
 
 export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
   const router = useRouter()
@@ -236,29 +233,18 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
   const [minScore, setMinScore] = useState(0)
   const [active, setActive] = useState<Set<string>>(new Set())
 
-  // Hover help tooltip (Hebrew). Positioned with viewport coords so it isn't
-  // clipped by the sticky, overflow-auto table container.
+  // Hover help tooltip (Hebrew). Shown only while the pointer is over a column
+  // title; positioned with viewport coords so it isn't clipped by the sticky,
+  // overflow-auto table container.
   const [tip, setTip] = useState<{ text: string; x: number; y: number } | null>(null)
-  const tipTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  function clearTipTimer() {
-    if (tipTimer.current) {
-      clearTimeout(tipTimer.current)
-      tipTimer.current = null
-    }
-  }
   function showTip(e: MouseEvent<HTMLElement>, text: string) {
     const r = e.currentTarget.getBoundingClientRect()
     const x = Math.max(8, Math.min(r.left, window.innerWidth - TIP_WIDTH - 8))
-    clearTipTimer()
     setTip({ text, x, y: r.bottom + 6 })
-    tipTimer.current = setTimeout(() => setTip(null), TIP_TTL_MS)
   }
   function hideTip() {
-    clearTipTimer()
     setTip(null)
   }
-  // Belt-and-suspenders: clear any pending timer on unmount.
-  useEffect(() => clearTipTimer, [])
 
   function toggle(key: SortKey) {
     if (key === sortKey) setDir(dir === 'asc' ? 'desc' : 'asc')
@@ -315,7 +301,11 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
     })
   }, [filtered, sortKey, dir])
 
-  const SortHeader = ({ label, k, className }: { label: string; k: SortKey; className?: string }) => {
+  // Rendered inline (a function call, NOT a <SortHeader/> element) so React
+  // keeps the same <th> node across re-renders instead of remounting it — that
+  // remount was silently dropping the button's mouseleave, which left the help
+  // tooltip stuck on screen. Now the tooltip strictly follows the hover.
+  const sortHeader = (label: string, k: SortKey, className?: string) => {
     const help = COLUMN_HELP[k]
     return (
       <th className={className}>
@@ -445,19 +435,19 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
                 <th />
               </tr>
               <tr className="text-left [&>th]:sticky [&>th]:top-8 [&>th]:z-10 [&>th]:border-b [&>th]:border-border [&>th]:bg-surface [&>th]:px-4 [&>th]:py-3">
-                <SortHeader label="Ticker" k="symbol" />
-                <SortHeader label="Trailing P/E (1)" k="trailingPe" className="border-l border-border" />
-                <SortHeader label="YoY EPS (3)" k="yoyPct" />
-                <SortHeader label="Forward P/E" k="forwardPe" className="border-l border-border" />
-                <SortHeader label="NTM EPS Growth (%)" k="fwdPct" />
-                <SortHeader label="PEG (5yr exp)" k="peg5yr" className="border-l border-border" />
-                <SortHeader label="EPS CAGR 5yr expected" k="epsCagr5yr" />
-                <SortHeader label="SMA 150" k="sma150" className="border-l border-border" />
-                <SortHeader label="% vs SMA 150" k="vsSma150" />
-                <SortHeader label="Price" k="price" className="border-l border-border" />
-                <SortHeader label="Market Cap" k="marketCap" className="border-l border-border" />
-                <SortHeader label="All Time High" k="allTimeHigh" />
-                <SortHeader label="% ATH" k="pctFromAth" />
+                {sortHeader('Ticker', 'symbol')}
+                {sortHeader('Trailing P/E (1)', 'trailingPe', 'border-l border-border')}
+                {sortHeader('YoY EPS (3)', 'yoyPct')}
+                {sortHeader('Forward P/E', 'forwardPe', 'border-l border-border')}
+                {sortHeader('NTM EPS Growth (%)', 'fwdPct')}
+                {sortHeader('PEG (5yr exp)', 'peg5yr', 'border-l border-border')}
+                {sortHeader('EPS CAGR 5yr expected', 'epsCagr5yr')}
+                {sortHeader('SMA 150', 'sma150', 'border-l border-border')}
+                {sortHeader('% vs SMA 150', 'vsSma150')}
+                {sortHeader('Price', 'price', 'border-l border-border')}
+                {sortHeader('Market Cap', 'marketCap', 'border-l border-border')}
+                {sortHeader('All Time High', 'allTimeHigh')}
+                {sortHeader('% ATH', 'pctFromAth')}
                 <th />
               </tr>
             </thead>
