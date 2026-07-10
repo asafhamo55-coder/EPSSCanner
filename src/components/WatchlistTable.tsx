@@ -4,6 +4,7 @@ import { type MouseEvent, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { ArrowDown, ArrowUp, Search, X } from 'lucide-react'
 import { Badge, Card } from '@/ui'
+import { bigUsd, usd } from '@/lib/format'
 import type { SignalState } from '@/lib/signals'
 import { SignalChip } from './SignalChip'
 import { RemoveTickerButton } from './RemoveTickerButton'
@@ -13,6 +14,9 @@ export interface WatchlistRow {
   name: string | null
   price: number | null
   sma150: number | null
+  marketCap: number | null
+  allTimeHigh: number | null
+  pctFromAth: number | null // % distance from all-time high (≤ 0)
   trailingPe: number | null
   forwardPe: number | null
   peg5yr: number | null
@@ -44,6 +48,9 @@ type SortKey =
   | 'sma150'
   | 'vsSma150'
   | 'price'
+  | 'marketCap'
+  | 'allTimeHigh'
+  | 'pctFromAth'
 
 function cmpNum(x: number, y: number): number {
   return x < y ? -1 : x > y ? 1 : 0
@@ -77,6 +84,12 @@ function sortVal(r: WatchlistRow, key: SortKey): number {
       return vsSma150Pct(r) ?? -Infinity
     case 'price':
       return r.price ?? -Infinity
+    case 'marketCap':
+      return r.marketCap ?? -Infinity
+    case 'allTimeHigh':
+      return r.allTimeHigh ?? -Infinity
+    case 'pctFromAth':
+      return r.pctFromAth ?? -Infinity
     default:
       return 0
   }
@@ -177,6 +190,10 @@ const COLUMN_HELP: Partial<Record<SortKey, string>> = {
     'ממוצע נע של מחיר המניה על פני 150 ימי מסחר. "מעל"/"מתחת" מציין היכן המחיר הנוכחי ביחס אליו.',
   vsSma150: 'בכמה אחוזים המחיר הנוכחי גבוה (+) או נמוך (−) מהממוצע הנע ל-150 יום.',
   price: 'מחיר המניה העדכני (אחרון ידוע).',
+  marketCap: 'שווי השוק של החברה: מחיר המניה כפול מספר המניות. משקף את גודל החברה.',
+  allTimeHigh: 'המחיר הגבוה ביותר שהמניה נסחרה בו אי פעם (שיא כל הזמנים).',
+  pctFromAth:
+    'בכמה אחוזים המחיר הנוכחי נמוך משיא כל הזמנים. 0% פירושו שהמניה בשיא חדש; ערך שלילי מציין את המרחק מהשיא.',
 }
 
 // Approx. tooltip width (matches max-w below) — used to keep it on-screen.
@@ -357,6 +374,9 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
                   150 SMA indicator
                 </th>
                 <th className="border-l border-border" />
+                <th colSpan={3} className="border-l border-border">
+                  Size &amp; range
+                </th>
                 <th />
               </tr>
               <tr className="text-left [&>th]:sticky [&>th]:top-8 [&>th]:z-10 [&>th]:border-b [&>th]:border-border [&>th]:bg-surface [&>th]:px-4 [&>th]:py-3">
@@ -370,13 +390,16 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
                 <SortHeader label="SMA 150" k="sma150" className="border-l border-border" />
                 <SortHeader label="% vs SMA 150" k="vsSma150" />
                 <SortHeader label="Price" k="price" className="border-l border-border" />
+                <SortHeader label="Market Cap" k="marketCap" className="border-l border-border" />
+                <SortHeader label="All Time High" k="allTimeHigh" />
+                <SortHeader label="% ATH" k="pctFromAth" />
                 <th />
               </tr>
             </thead>
             <tbody>
               {sorted.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="px-4 py-10 text-center text-sm text-muted">
+                  <td colSpan={14} className="px-4 py-10 text-center text-sm text-muted">
                     No tickers match these filters.
                   </td>
                 </tr>
@@ -488,6 +511,35 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
                             })}`
                           : 'N/A'}
                       </span>
+                    </td>
+                    <td className="border-l border-border">
+                      <span className="tabular-nums text-foreground">{bigUsd(r.marketCap)}</span>
+                    </td>
+                    <td>
+                      <span className="tabular-nums text-muted">
+                        {r.allTimeHigh != null ? usd(r.allTimeHigh) : 'N/A'}
+                      </span>
+                    </td>
+                    <td>
+                      {r.pctFromAth == null ? (
+                        <Badge variant="neutral" size="sm">
+                          N/A
+                        </Badge>
+                      ) : (
+                        <span
+                          className={
+                            'font-semibold tabular-nums ' +
+                            (r.pctFromAth >= -5
+                              ? 'text-emerald-600'
+                              : r.pctFromAth >= -20
+                                ? 'text-amber-600'
+                                : 'text-red-600')
+                          }
+                        >
+                          {r.pctFromAth >= 0 ? '+' : ''}
+                          {r.pctFromAth.toFixed(1)}%
+                        </span>
+                      )}
                     </td>
                     <td onClick={(e) => e.stopPropagation()}>
                       <RemoveTickerButton symbol={r.symbol} />

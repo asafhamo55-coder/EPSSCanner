@@ -28,11 +28,20 @@ function toRow(t: TickerData): WatchlistRow {
   // column). `sc.fwd.pct` already carries the (ratio − 1) × 100 growth.
   const fwdLabel =
     sc.fwd.state === 'na' || sc.fwd.pct == null ? 'N/A' : `${sc.fwd.pct.toFixed(0)}%`
+  // % distance from the all-time high — price is at/below the ATH, so this is
+  // ≤ 0 (0 = making new highs). Null when either input is missing.
+  const ath = t.valuation.allTimeHigh
+  const price = t.valuation.price
+  const pctFromAth =
+    ath != null && ath !== 0 && price != null ? ((price - ath) / ath) * 100 : null
   return {
     symbol: t.symbol,
     name: t.name,
     price: t.valuation.price,
     sma150: t.valuation.sma150,
+    marketCap: t.valuation.marketCap,
+    allTimeHigh: ath,
+    pctFromAth,
     trailingPe: sc.pe.trailingPe,
     forwardPe: sc.fwd.forwardPe,
     peg5yr,

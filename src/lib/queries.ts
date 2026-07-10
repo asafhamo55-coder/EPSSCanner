@@ -31,6 +31,20 @@ async function liveSma150(symbol: string, yahoo: YahooProvider): Promise<number 
   return sma
 }
 
+// Live all-time high — like the SMA, not persisted in the snapshot table. Fetched
+// from Yahoo's keyless chart endpoint (full history) and cached per warm instance.
+// The ATH moves rarely, so the TTL is a full day.
+const athCache = new Map<string, { ath: number | null; ts: number }>()
+const ATH_TTL_MS = 24 * 60 * 60 * 1000
+
+async function liveAth(symbol: string, yahoo: YahooProvider): Promise<number | null> {
+  const cached = athCache.get(symbol)
+  if (cached && Date.now() - cached.ts < ATH_TTL_MS) return cached.ath
+  const ath = await yahoo.getAllTimeHigh(symbol).catch(() => null)
+  athCache.set(symbol, { ath, ts: Date.now() })
+  return ath
+}
+
 // Read helpers for the dashboard + ticker detail. Reads raw screener_* tables
 // and runs the SAME signals engine the ingest path / tests use, so every
 // surface agrees on the numbers. The watchlist is tiny, so the per-ticker
@@ -62,6 +76,7 @@ export interface Valuation {
   roiTtm: number | null
   marketCap: number | null
   sma150: number | null // 150-day simple moving average (live, not persisted)
+  allTimeHigh: number | null // all-time high price (live, not persisted)
 }
 
 export interface TickerData {
@@ -94,6 +109,7 @@ const EMPTY_VALUATION: Valuation = {
   roiTtm: null,
   marketCap: null,
   sma150: null,
+  allTimeHigh: null,
 }
 
 function strictlyIncreasing(values: Array<number | null>): boolean | null {
@@ -172,6 +188,7 @@ async function loadFor(tickerId: string) {
         roiTtm: (v.roi_ttm as number | null) ?? null,
         marketCap: (v.market_cap as number | null) ?? null,
         sma150: null, // filled live in getWatchlist / getTicker
+        allTimeHigh: null, // filled live in getWatchlist / getTicker
       }
     : EMPTY_VALUATION
 
@@ -199,11 +216,12 @@ export async function getWatchlist(): Promise<TickerData[]> {
     rows.map(async (row) => {
       const { eps, valuation, annual } = await loadFor(row.id)
       let val = valuation
-      const [peg, sma150] = await Promise.all([
+      const [peg, sma150, allTimeHigh] = await Promise.all([
         val.peg5yr == null ? livePeg(row.symbol, yahoo) : Promise.resolve(val.peg5yr),
         liveSma150(row.symbol, yahoo),
+        liveAth(row.symbol, yahoo),
       ])
-      val = { ...val, peg5yr: peg ?? val.peg5yr, sma150 }
+      val = { ...val, peg5yr: peg ?? val.peg5yr, sma150, allTimeHigh }
       return assemble(row, eps, val, annual)
     }),
   )
@@ -223,10 +241,11 @@ export async function getTicker(symbol: string): Promise<TickerData | null> {
   const { eps, valuation, annual } = await loadFor(row.id)
   let val = valuation
   const yahoo = new YahooProvider()
-  const [peg, sma150] = await Promise.all([
+  const [peg, sma150, allTimeHigh] = await Promise.all([
     val.peg5yr == null ? livePeg(row.symbol, yahoo) : Promise.resolve(val.peg5yr),
     liveSma150(row.symbol, yahoo),
+    liveAth(row.symbol, yahoo),
   ])
-  val = { ...val, peg5yr: peg ?? val.peg5yr, sma150 }
+  val = { ...val, peg5yr: peg ?? val.peg5yr, sma150, allTimeHigh }
   return assemble(row, eps, val, annual)
 }

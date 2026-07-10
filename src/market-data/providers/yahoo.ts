@@ -329,6 +329,32 @@ export class YahooProvider implements DataProvider {
     return window.reduce((sum, c) => sum + c, 0) / window.length
   }
 
+  /** All-time high price, from Yahoo's keyless chart endpoint over the full
+   *  history (`range=max`). Monthly candles are enough — each month's `high`
+   *  is the peak intraday high in that month, so the max across all monthly
+   *  highs is the true all-time high (falling back to closes). Returns null
+   *  when no valid history is available. */
+  async getAllTimeHigh(symbol: string): Promise<number | null> {
+    const url = new URL(`${CHART_BASE}/${encodeURIComponent(symbol)}`)
+    url.searchParams.set('range', 'max')
+    url.searchParams.set('interval', '1mo')
+    const res = await fetch(url, {
+      headers: { 'User-Agent': UA, accept: 'application/json' },
+    })
+    if (!res.ok) throw new ProviderError(`Yahoo chart → ${res.status}`, symbol, res.status)
+    const json = (await res.json()) as {
+      chart?: {
+        result?: { indicators?: { quote?: { high?: (number | null)[]; close?: (number | null)[] }[] } }[]
+      }
+    }
+    const q = json.chart?.result?.[0]?.indicators?.quote?.[0]
+    const points = [...(q?.high ?? []), ...(q?.close ?? [])].filter(
+      (c): c is number => typeof c === 'number' && Number.isFinite(c),
+    )
+    if (points.length === 0) return null
+    return Math.max(...points)
+  }
+
   async getAnnualFinancials(symbol: string, years: number): Promise<AnnualRow[]> {
     const s = await fetchSummary(symbol)
     const rows = s.incomeStatementHistory?.incomeStatementHistory ?? []
