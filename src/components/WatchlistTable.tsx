@@ -654,6 +654,17 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
                 </div>
 
                 <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2.5 border-t border-border pt-3">
+                  <MobileStat label="Trailing P/E (1)">
+                    <SignalChip
+                      state={r.peState}
+                      label={r.trailingPe != null ? `${r.trailingPe.toFixed(1)}×` : 'N/A'}
+                    />
+                  </MobileStat>
+                  <MobileStat label="Forward P/E">
+                    <Badge variant="neutral" size="sm">
+                      {r.forwardPe != null ? `${r.forwardPe.toFixed(1)}×` : 'N/A'}
+                    </Badge>
+                  </MobileStat>
                   <MobileStat label="YoY EPS (3)">
                     <SignalChip state={r.yoyState} label={r.yoyLabel} />
                   </MobileStat>
@@ -664,6 +675,18 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
                     <span className={r.peg5yr != null && r.peg5yr < 1 ? 'text-emerald-600' : undefined}>
                       {r.peg5yr != null ? r.peg5yr.toFixed(2) : 'N/A'}
                     </span>
+                  </MobileStat>
+                  <MobileStat label="% vs SMA 150">
+                    {(() => {
+                      const v = vsSma150Pct(r)
+                      if (v == null) return 'N/A'
+                      return (
+                        <span className={v >= 0 ? 'text-emerald-600' : 'text-red-600'}>
+                          {v >= 0 ? '+' : ''}
+                          {v.toFixed(1)}%
+                        </span>
+                      )
+                    })()}
                   </MobileStat>
                   <MobileStat label="% ATH">
                     {ath == null ? (
