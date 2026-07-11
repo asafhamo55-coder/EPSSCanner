@@ -702,6 +702,23 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
                       </span>
                     )}
                   </MobileStat>
+                  <MobileStat label="EPS CAGR 5yr exp">
+                    {r.epsCagr5yr == null ? (
+                      'N/A'
+                    ) : (
+                      <span
+                        className={
+                          r.epsCagr5yr < 15
+                            ? 'text-red-600'
+                            : r.epsCagr5yr <= 30
+                              ? 'text-amber-600'
+                              : 'text-emerald-600'
+                        }
+                      >
+                        {r.epsCagr5yr.toFixed(1)}%
+                      </span>
+                    )}
+                  </MobileStat>
                 </div>
               </Card>
             )
