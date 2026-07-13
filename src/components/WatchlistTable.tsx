@@ -676,32 +676,6 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
                       {r.peg5yr != null ? r.peg5yr.toFixed(2) : 'N/A'}
                     </span>
                   </MobileStat>
-                  <MobileStat label="% vs SMA 150">
-                    {(() => {
-                      const v = vsSma150Pct(r)
-                      if (v == null) return 'N/A'
-                      return (
-                        <span className={v >= 0 ? 'text-emerald-600' : 'text-red-600'}>
-                          {v >= 0 ? '+' : ''}
-                          {v.toFixed(1)}%
-                        </span>
-                      )
-                    })()}
-                  </MobileStat>
-                  <MobileStat label="% ATH">
-                    {ath == null ? (
-                      'N/A'
-                    ) : (
-                      <span
-                        className={
-                          ath >= -5 ? 'text-emerald-600' : ath >= -20 ? 'text-amber-600' : 'text-red-600'
-                        }
-                      >
-                        {ath >= 0 ? '+' : ''}
-                        {ath.toFixed(1)}%
-                      </span>
-                    )}
-                  </MobileStat>
                   <MobileStat label="EPS CAGR 5yr exp">
                     {r.epsCagr5yr == null ? (
                       'N/A'
@@ -718,6 +692,32 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
                         {r.epsCagr5yr.toFixed(1)}%
                       </span>
                     )}
+                  </MobileStat>
+                  <MobileStat label="% ATH">
+                    {ath == null ? (
+                      'N/A'
+                    ) : (
+                      <span
+                        className={
+                          ath >= -5 ? 'text-emerald-600' : ath >= -20 ? 'text-amber-600' : 'text-red-600'
+                        }
+                      >
+                        {ath >= 0 ? '+' : ''}
+                        {ath.toFixed(1)}%
+                      </span>
+                    )}
+                  </MobileStat>
+                  <MobileStat label="% vs SMA 150">
+                    {(() => {
+                      const v = vsSma150Pct(r)
+                      if (v == null) return 'N/A'
+                      return (
+                        <span className={v >= 0 ? 'text-emerald-600' : 'text-red-600'}>
+                          {v >= 0 ? '+' : ''}
+                          {v.toFixed(1)}%
+                        </span>
+                      )
+                    })()}
                   </MobileStat>
                 </div>
               </Card>
