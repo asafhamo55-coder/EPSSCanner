@@ -1,3 +1,4 @@
+import { revalidatePath, revalidateTag } from 'next/cache'
 import { NextResponse, type NextRequest } from 'next/server'
 import { ingestAllActive, ingestTicker } from '@/lib/ingest'
 
@@ -19,12 +20,22 @@ function authorized(req: NextRequest): boolean {
 // Cron runs can exceed the default serverless window on a big watchlist.
 export const maxDuration = 60
 
+// The dashboard is served from the CDN (ISR), so a fresh ingest is invisible
+// until its cache is dropped. Publish the new numbers as soon as they land
+// rather than waiting out the page's revalidate window.
+function publish(symbol?: string) {
+  revalidateTag('yahoo-live')
+  revalidatePath('/')
+  if (symbol) revalidatePath(`/ticker/${symbol}`)
+}
+
 export async function GET(req: NextRequest) {
   if (!authorized(req)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
   try {
     const results = await ingestAllActive()
+    publish()
     return NextResponse.json({ ok: true, refreshed: results.length })
   } catch (e) {
     return NextResponse.json({ ok: false, error: (e as Error).message }, { status: 502 })
@@ -46,9 +57,11 @@ export async function POST(req: NextRequest) {
   try {
     if (body.symbol) {
       const result = await ingestTicker(body.symbol)
+      publish(result.symbol)
       return NextResponse.json({ ok: true, result })
     }
     const results = await ingestAllActive()
+    publish()
     return NextResponse.json({ ok: true, refreshed: results.length, results })
   } catch (e) {
     return NextResponse.json({ ok: false, error: (e as Error).message }, { status: 502 })

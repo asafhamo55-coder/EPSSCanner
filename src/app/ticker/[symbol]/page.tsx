@@ -16,8 +16,9 @@ import { bigUsd, marginPct, num, usd } from '@/lib/format'
 import { RefreshButton } from '@/components/RefreshButton'
 import { RemoveTickerButton } from '@/components/RemoveTickerButton'
 import { Scorecard } from '@/components/Scorecard'
-import { EpsTrendChart } from '@/components/charts/EpsTrendChart'
-import { QoqDeltaChart } from '@/components/charts/QoqDeltaChart'
+// Lazy (client-side, on-mount) — keeps the ~1.1MB echarts chunk off the
+// Overview tab. See LazyCharts for why the boundary lives there.
+import { EpsTrendChart, QoqDeltaChart } from '@/components/charts/LazyCharts'
 import { predictEps } from '@/lib/forecast'
 
 export const dynamic = 'force-dynamic'

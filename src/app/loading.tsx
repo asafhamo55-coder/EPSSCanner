@@ -1,15 +1,24 @@
 import { Skeleton } from '@/ui'
+import { IndicesPanelSkeleton, WatchlistSkeleton } from '@/components/DashboardSkeletons'
 
+// Shown during client-side navigation back to the dashboard. Mirrors the real
+// page structure (indices strip → header → watchlist) rather than generic
+// blocks, so there's no layout jump when the content arrives.
 export default function Loading() {
   return (
     <div className="space-y-6">
-      <Skeleton className="h-10 w-64" />
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {Array.from({ length: 4 }).map((_, i) => (
-          <Skeleton key={i} className="h-28 w-full rounded-xl" />
-        ))}
+      <IndicesPanelSkeleton />
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="space-y-2">
+          <Skeleton className="h-8 w-48" />
+          <Skeleton className="h-4 w-96 max-w-full" />
+        </div>
+        <div className="ml-auto flex gap-2">
+          <Skeleton className="h-9 w-40" />
+          <Skeleton className="h-9 w-32" />
+        </div>
       </div>
-      <Skeleton className="h-72 w-full rounded-xl" />
+      <WatchlistSkeleton />
     </div>
   )
 }

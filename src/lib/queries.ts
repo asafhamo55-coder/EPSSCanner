@@ -1,49 +1,50 @@
+import { unstable_cache } from 'next/cache'
 import { buildScorecard, type Scorecard } from './signals'
 import { db } from './db'
 import { YahooProvider } from '@/market-data'
 
-// Live PEG fallback — used only when the stored peg_5yr is null (pre-migration).
-// Cached briefly per warm instance so repeated loads don't re-hammer Yahoo.
-const pegCache = new Map<string, { peg: number | null; ts: number }>()
-const PEG_TTL_MS = 60 * 60 * 1000
+// ── live Yahoo fields, cached in the Next Data Cache ──────────────────────────
+//
+// These three fields aren't persisted in the snapshot table, so they're fetched
+// from Yahoo on read. They used to sit in module-level Maps, which only ever hit
+// within a single warm instance — on serverless, most loads are cold, so a 57-
+// ticker watchlist re-paid the full fan-out (~450ms SMA + ~285ms ATH, plus a
+// ~1.3s cookie/crumb handshake for the first PEG call) on nearly every request.
+//
+// unstable_cache persists across instances and deploys-in-place, so a warm entry
+// costs nothing. Errors are deliberately NOT caught inside the cached function:
+// a throw is left uncached (so a transient Yahoo blip is retried next read),
+// while a legitimate null — Yahoo genuinely has no value — is cached normally.
+// Callers below turn the throw into null.
 
-async function livePeg(symbol: string, yahoo: YahooProvider): Promise<number | null> {
-  const cached = pegCache.get(symbol)
-  if (cached && Date.now() - cached.ts < PEG_TTL_MS) return cached.peg
-  const peg = await yahoo
-    .getValuation(symbol)
-    .then((v) => v.peg5yr)
-    .catch(() => null)
-  pegCache.set(symbol, { peg, ts: Date.now() })
-  return peg
-}
+const PEG_TTL_S = 60 * 60
+const SMA_TTL_S = 6 * 60 * 60
+const ATH_TTL_S = 24 * 60 * 60
 
-// Live 150-day SMA — not persisted in the snapshot table, so it's fetched from
-// Yahoo's keyless chart endpoint and cached per warm instance.
-const smaCache = new Map<string, { sma: number | null; ts: number }>()
-const SMA_TTL_MS = 6 * 60 * 60 * 1000
+/** Live PEG fallback — used only when the stored peg_5yr is null (pre-migration). */
+const cachedPeg = unstable_cache(
+  (symbol: string) => new YahooProvider().getValuation(symbol).then((v) => v.peg5yr),
+  ['yahoo-peg5yr-v1'],
+  { revalidate: PEG_TTL_S, tags: ['yahoo-live'] },
+)
 
-async function liveSma150(symbol: string, yahoo: YahooProvider): Promise<number | null> {
-  const cached = smaCache.get(symbol)
-  if (cached && Date.now() - cached.ts < SMA_TTL_MS) return cached.sma
-  const sma = await yahoo.getSma(symbol, 150).catch(() => null)
-  smaCache.set(symbol, { sma, ts: Date.now() })
-  return sma
-}
+/** Live 150-day SMA, from Yahoo's keyless chart endpoint. */
+const cachedSma150 = unstable_cache(
+  (symbol: string) => new YahooProvider().getSma(symbol, 150),
+  ['yahoo-sma150-v1'],
+  { revalidate: SMA_TTL_S, tags: ['yahoo-live'] },
+)
 
-// Live all-time high — like the SMA, not persisted in the snapshot table. Fetched
-// from Yahoo's keyless chart endpoint (full history) and cached per warm instance.
-// The ATH moves rarely, so the TTL is a full day.
-const athCache = new Map<string, { ath: number | null; ts: number }>()
-const ATH_TTL_MS = 24 * 60 * 60 * 1000
+/** Live all-time high. Moves rarely, so the TTL is a full day. */
+const cachedAth = unstable_cache(
+  (symbol: string) => new YahooProvider().getAllTimeHigh(symbol),
+  ['yahoo-ath-v1'],
+  { revalidate: ATH_TTL_S, tags: ['yahoo-live'] },
+)
 
-async function liveAth(symbol: string, yahoo: YahooProvider): Promise<number | null> {
-  const cached = athCache.get(symbol)
-  if (cached && Date.now() - cached.ts < ATH_TTL_MS) return cached.ath
-  const ath = await yahoo.getAllTimeHigh(symbol).catch(() => null)
-  athCache.set(symbol, { ath, ts: Date.now() })
-  return ath
-}
+const livePeg = (symbol: string) => cachedPeg(symbol).catch(() => null)
+const liveSma150 = (symbol: string) => cachedSma150(symbol).catch(() => null)
+const liveAth = (symbol: string) => cachedAth(symbol).catch(() => null)
 
 // Read helpers for the dashboard + ticker detail. Reads raw screener_* tables
 // and runs the SAME signals engine the ingest path / tests use, so every
@@ -211,15 +212,14 @@ export async function getWatchlist(): Promise<TickerData[]> {
     .order('symbol', { ascending: true })
 
   const rows = (data ?? []) as TickerRow[]
-  const yahoo = new YahooProvider()
   return Promise.all(
     rows.map(async (row) => {
       const { eps, valuation, annual } = await loadFor(row.id)
       let val = valuation
       const [peg, sma150, allTimeHigh] = await Promise.all([
-        val.peg5yr == null ? livePeg(row.symbol, yahoo) : Promise.resolve(val.peg5yr),
-        liveSma150(row.symbol, yahoo),
-        liveAth(row.symbol, yahoo),
+        val.peg5yr == null ? livePeg(row.symbol) : Promise.resolve(val.peg5yr),
+        liveSma150(row.symbol),
+        liveAth(row.symbol),
       ])
       val = { ...val, peg5yr: peg ?? val.peg5yr, sma150, allTimeHigh }
       return assemble(row, eps, val, annual)
@@ -240,11 +240,10 @@ export async function getTicker(symbol: string): Promise<TickerData | null> {
   const row = data as TickerRow
   const { eps, valuation, annual } = await loadFor(row.id)
   let val = valuation
-  const yahoo = new YahooProvider()
   const [peg, sma150, allTimeHigh] = await Promise.all([
-    val.peg5yr == null ? livePeg(row.symbol, yahoo) : Promise.resolve(val.peg5yr),
-    liveSma150(row.symbol, yahoo),
-    liveAth(row.symbol, yahoo),
+    val.peg5yr == null ? livePeg(row.symbol) : Promise.resolve(val.peg5yr),
+    liveSma150(row.symbol),
+    liveAth(row.symbol),
   ])
   val = { ...val, peg5yr: peg ?? val.peg5yr, sma150, allTimeHigh }
   return assemble(row, eps, val, annual)

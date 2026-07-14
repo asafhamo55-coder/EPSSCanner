@@ -1,6 +1,6 @@
 'use server'
 
-import { revalidatePath } from 'next/cache'
+import { revalidatePath, revalidateTag } from 'next/cache'
 import { db } from '@/lib/db'
 import { ingestAllActive, ingestTicker } from '@/lib/ingest'
 import { getProvider } from '@/market-data'
@@ -92,6 +92,10 @@ export async function addTickerAction(symbol: string): Promise<ActionResult> {
 export async function refreshTickerAction(symbol: string): Promise<ActionResult> {
   try {
     const res = await ingestTicker(symbol)
+    // The live Yahoo fields (SMA / ATH / PEG) are held in the Data Cache for
+    // 6-24h. An explicit "Refresh now" must mean it, so drop them too — not
+    // just the re-ingested DB rows.
+    revalidateTag('yahoo-live')
     revalidatePath('/')
     revalidatePath(`/ticker/${res.symbol}`)
     return { ok: true, message: `Refreshed ${res.symbol}.` }
@@ -103,6 +107,7 @@ export async function refreshTickerAction(symbol: string): Promise<ActionResult>
 export async function refreshAllAction(): Promise<ActionResult> {
   try {
     const res = await ingestAllActive()
+    revalidateTag('yahoo-live')
     revalidatePath('/')
     return { ok: true, message: `Refreshed ${res.length} ticker${res.length === 1 ? '' : 's'}.` }
   } catch (e) {

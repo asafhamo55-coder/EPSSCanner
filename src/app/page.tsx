@@ -1,3 +1,4 @@
+import { Suspense } from 'react'
 import Link from 'next/link'
 import { LineChart, Plus } from 'lucide-react'
 import { Button, EmptyState, PageHeader } from '@/ui'
@@ -7,8 +8,14 @@ import { AddTickerForm } from '@/components/AddTickerForm'
 import { RefreshButton } from '@/components/RefreshButton'
 import { WatchlistTable, type WatchlistRow } from '@/components/WatchlistTable'
 import { IndicesPanel } from '@/components/IndicesPanel'
+import { IndicesPanelSkeleton, WatchlistSkeleton } from '@/components/DashboardSkeletons'
 
-export const dynamic = 'force-dynamic'
+// Rendered ahead of the request and served from the CDN, so opening the app
+// paints real content immediately instead of waiting on the ~57-ticker fan-out
+// (Supabase reads + live Yahoo SMA/ATH/PEG). The underlying data is re-ingested
+// weekly by the cron, so a 5-minute window is far fresher than the source; any
+// mutation (add / remove / refresh) calls revalidatePath('/') for an instant bust.
+export const revalidate = 300
 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1)
@@ -62,15 +69,38 @@ function toRow(t: TickerData): WatchlistRow {
   }
 }
 
-export default async function DashboardPage() {
+async function Watchlist() {
   const watchlist = await getWatchlist()
   const rows = watchlist.map(toRow)
 
-  const total = rows.length
+  if (rows.length === 0) {
+    return (
+      <EmptyState
+        icon={<LineChart className="h-8 w-8" />}
+        title="No tickers yet"
+        description="Add your first ticker to start tracking YoY EPS growth, sequential trend, and forward signals. Try NVDA, AAPL, or any symbol."
+        action={
+          <Button asChild>
+            <Link href="#">
+              <Plus className="h-4 w-4" />
+              Use the add box above
+            </Link>
+          </Button>
+        }
+      />
+    )
+  }
+  return <WatchlistTable rows={rows} />
+}
 
+export default function DashboardPage() {
   return (
     <div className="space-y-6">
-      <IndicesPanel />
+      {/* Each slow section streams behind its own boundary, so the header and
+          add/refresh controls stay interactive while data resolves. */}
+      <Suspense fallback={<IndicesPanelSkeleton />}>
+        <IndicesPanel />
+      </Suspense>
 
       <PageHeader
         title="Watchlist"
@@ -78,28 +108,14 @@ export default async function DashboardPage() {
         actions={
           <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
             <AddTickerForm />
-            {total > 0 ? <RefreshButton /> : null}
+            <RefreshButton />
           </div>
         }
       />
 
-      {total === 0 ? (
-        <EmptyState
-          icon={<LineChart className="h-8 w-8" />}
-          title="No tickers yet"
-          description="Add your first ticker to start tracking YoY EPS growth, sequential trend, and forward signals. Try NVDA, AAPL, or any symbol."
-          action={
-            <Button asChild>
-              <Link href="#">
-                <Plus className="h-4 w-4" />
-                Use the add box above
-              </Link>
-            </Button>
-          }
-        />
-      ) : (
-        <WatchlistTable rows={rows} />
-      )}
+      <Suspense fallback={<WatchlistSkeleton />}>
+        <Watchlist />
+      </Suspense>
     </div>
   )
 }

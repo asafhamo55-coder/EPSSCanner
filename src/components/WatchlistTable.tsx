@@ -226,6 +226,13 @@ const TIP_WIDTH = 320
 
 export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
   const router = useRouter()
+
+  // Warm the detail route on intent (hover / touch-down) rather than for every
+  // visible row — with ~57 rows, prefetching all of them would fan out just as
+  // hard as the load we're trying to avoid. By the time the click lands the
+  // route is usually already in the client cache, so navigation is instant.
+  const prefetch = (symbol: string) => router.prefetch(`/ticker/${symbol}`)
+
   const [sortKey, setSortKey] = useState<SortKey>('composite')
   const [dir, setDir] = useState<'asc' | 'desc'>('desc')
 
@@ -463,6 +470,7 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
                   <tr
                     key={r.symbol}
                     onClick={() => router.push(`/ticker/${r.symbol}`)}
+                    onMouseEnter={() => prefetch(r.symbol)}
                     className="cursor-pointer border-b border-border last:border-0 transition-colors hover:bg-background [&>td]:px-4 [&>td]:py-3"
                   >
                     <td>
@@ -621,6 +629,7 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
               <Card
                 key={r.symbol}
                 onClick={() => router.push(`/ticker/${r.symbol}`)}
+                onTouchStart={() => prefetch(r.symbol)}
                 className="cursor-pointer p-3.5 transition-colors active:bg-background"
               >
                 <div className="flex items-center gap-3">
