@@ -23,6 +23,7 @@ import {
   yoyGrowth,
 } from '../src/lib/signals'
 import { MockProvider } from '../src/market-data/index'
+import { forwardPeFromTrend } from '../src/market-data/providers/yahoo'
 
 let failures = 0
 
@@ -102,6 +103,30 @@ async function main() {
   eq(qoqTrend([0.2]).state, 'na', 'Single delta → n/a (no slope)')
   eq(peReasonableness(null).state, 'na', 'Missing P/E → n/a')
   eq(peReasonableness(25).state, 'pass', 'P/E 25 in band → pass')
+
+  // ── Forward P/E fiscal-year selection ────────────────────────────
+  // Real Yahoo earningsTrend payloads, captured 2026-07-15. The roll to +1y
+  // fires only while the current FY is still running; once it has ended but
+  // not yet been reported, Yahoo's `0y` slot still holds the forward year.
+  console.log('\nForward P/E fiscal-year selection')
+  const NOW = Date.parse('2026-07-15T00:00:00Z')
+  const trend = (endDate: string, cyEps: number, nyEps: number) => ({
+    trend: [
+      { period: '0y', endDate, earningsEstimate: { avg: cyEps } },
+      { period: '+1y', endDate: '2027-12-31', earningsEstimate: { avg: nyEps } },
+    ],
+  })
+  // SNDK: FY26 ended 16 days ago, unreported → stay on 0y (vendors quote ~24-27).
+  approx(forwardPeFromTrend(trend('2026-06-30', 66.51192, 208.21712), 1615, NOW), 24.28, 0.01,
+    'FY ended but unreported → 0y basis (SNDK 24.3, not 7.8)')
+  // MU: FY26 still running, 46 days out → roll to +1y.
+  approx(forwardPeFromTrend(trend('2026-08-31', 73.32485, 149.63846), 904.28, NOW), 6.04, 0.01,
+    'FY ends within 120d → +1y basis (MU 6.04)')
+  // PLTR: FY26 still running, 168 days out → stay on 0y.
+  approx(forwardPeFromTrend(trend('2026-12-31', 1.47608, 2.09448), 133.76, NOW), 90.62, 0.01,
+    'FY ends beyond 120d → 0y basis (PLTR 90.6)')
+  eq(forwardPeFromTrend(trend('2026-06-30', 66.51, 208.22), null, NOW), null, 'Missing price → null')
+  eq(forwardPeFromTrend(trend('2026-06-30', -1.5, 208.22), 1615, NOW), null, 'Negative FY estimate → null')
 
   // ── Result ───────────────────────────────────────────────────────
   console.log('')

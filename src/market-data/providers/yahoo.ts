@@ -50,10 +50,21 @@ export function num(v: YNum): number | null {
 }
 
 /** Yahoo-site Forward P/E: price ÷ the current fiscal year's EPS estimate,
- *  rolling to next year when the current FY ends within ~4 months. */
-function forwardPeFromTrend(
+ *  rolling to next year while the current FY is still running but within ~4
+ *  months of ending.
+ *
+ *  The roll only applies to a *live* fiscal year. Yahoo's `0y` slot advances
+ *  when the company reports, not when the FY ends, so between FY-end and the
+ *  earnings release `0y` points at a finished-but-unreported year — and its
+ *  EPS is still entirely forward-looking, since trailing EPS only covers
+ *  through the last reported quarter. Rolling past it there jumps a whole year
+ *  ahead of what the data vendors quote (SNDK on 2026-07-15, 16 days after its
+ *  unreported FY26 ended: 0y → 24.3, matching Yahoo's site 26.9 and
+ *  stockanalysis.com's 24.31; +1y → 7.8, matching nobody). */
+export function forwardPeFromTrend(
   trend: QuoteSummary['earningsTrend'],
   price: number | null,
+  now: number = Date.now(),
 ): number | null {
   if (price == null || price <= 0) return null
   const periods = trend?.trend ?? []
@@ -62,8 +73,8 @@ function forwardPeFromTrend(
   let chosen = cy
   const end = cy?.endDate
   if (end) {
-    const daysLeft = (Date.parse(end) - Date.now()) / 86_400_000
-    if (daysLeft < 120 && num(ny?.earningsEstimate?.avg) != null) chosen = ny
+    const daysLeft = (Date.parse(end) - now) / 86_400_000
+    if (daysLeft >= 0 && daysLeft < 120 && num(ny?.earningsEstimate?.avg) != null) chosen = ny
   } else if (ny) {
     chosen = ny
   }
