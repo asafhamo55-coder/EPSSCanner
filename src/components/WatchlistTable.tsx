@@ -1,6 +1,6 @@
 'use client'
 
-import { type MouseEvent, type ReactNode, useMemo, useState } from 'react'
+import { type MouseEvent, type ReactNode, useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { ArrowDown, ArrowUp, Search, X } from 'lucide-react'
 import { Badge, Card } from '@/ui'
@@ -224,6 +224,9 @@ const COLUMN_HELP: Partial<Record<SortKey, string>> = {
 // Approx. tooltip width (matches max-w below) — used to keep it on-screen.
 const TIP_WIDTH = 320
 
+// localStorage key holding the array of symbols ticked into "Filtered Stocks".
+const FILTERED_KEY = 'watchlist:filtered'
+
 export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
   const router = useRouter()
 
@@ -239,6 +242,33 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
   const [query, setQuery] = useState('')
   const [minScore, setMinScore] = useState(0)
   const [active, setActive] = useState<Set<string>>(new Set())
+
+  // Symbols the user has ticked into the "Filtered Stocks" table. Persisted to
+  // localStorage so the split survives reloads (per-browser, not synced to the
+  // DB). Starts empty so SSR and the first client render agree — the saved set
+  // is applied after mount, then the ticked rows float up.
+  const [checked, setChecked] = useState<Set<string>>(new Set())
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(FILTERED_KEY)
+      if (raw) setChecked(new Set(JSON.parse(raw) as string[]))
+    } catch {
+      // ignore malformed/unavailable storage — just start unfiltered
+    }
+  }, [])
+  function toggleChecked(symbol: string) {
+    setChecked((prev) => {
+      const next = new Set(prev)
+      if (next.has(symbol)) next.delete(symbol)
+      else next.add(symbol)
+      try {
+        localStorage.setItem(FILTERED_KEY, JSON.stringify([...next]))
+      } catch {
+        // storage unavailable (private mode / quota) — keep the in-memory split
+      }
+      return next
+    })
+  }
 
   // Hover help tooltip (Hebrew). Shown only while the pointer is over a column
   // title; positioned with viewport coords so it isn't clipped by the sticky,
@@ -308,6 +338,16 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
     })
   }, [filtered, sortKey, dir])
 
+  // Split the (filtered + sorted) list into the two tables. Filters and sort
+  // apply to both identically; the checkbox only decides which table a row
+  // lands in. A ticked row that no longer matches the active filters simply
+  // drops out of both, same as any other non-matching row.
+  const filteredStocks = useMemo(() => sorted.filter((r) => checked.has(r.symbol)), [sorted, checked])
+  const watchlistStocks = useMemo(
+    () => sorted.filter((r) => !checked.has(r.symbol)),
+    [sorted, checked],
+  )
+
   // Rendered inline (a function call, NOT a <SortHeader/> element) so React
   // keeps the same <th> node across re-renders instead of remounting it — that
   // remount was silently dropping the button's mouseleave, which left the help
@@ -331,6 +371,379 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
       </th>
     )
   }
+
+  // Trailing checkbox cell — ticking it moves the row into "Filtered Stocks",
+  // unticking returns it to the main watchlist. stopPropagation so the click
+  // doesn't also fire the row's navigate-to-ticker handler.
+  const checkboxCell = (symbol: string) => (
+    <td onClick={(e) => e.stopPropagation()} className="text-center">
+      <input
+        type="checkbox"
+        checked={checked.has(symbol)}
+        onChange={() => toggleChecked(symbol)}
+        aria-label={
+          checked.has(symbol)
+            ? `Remove ${symbol} from Filtered Stocks`
+            : `Add ${symbol} to Filtered Stocks`
+        }
+        className="h-4 w-4 cursor-pointer accent-primary align-middle"
+      />
+    </td>
+  )
+
+  // The full desktop/tablet table, rendered once per section (Filtered Stocks
+  // and Watchlist) over the given rows. Header, sort behaviour, and columns are
+  // shared; only the row set differs.
+  const desktopSection = (sectionRows: WatchlistRow[]) => (
+    <Card className="hidden overflow-hidden md:block">
+      {/* Scroll the table within its own region (capped to the viewport) so
+          the header row can stay frozen at the top as you scroll the data. */}
+      <div className="max-h-[calc(100vh-6rem)] overflow-auto">
+        <table className="w-full text-sm">
+          <thead>
+            {/* Grouping band — spans the columns beneath each time horizon. */}
+            <tr className="[&>th]:sticky [&>th]:top-0 [&>th]:z-10 [&>th]:h-8 [&>th]:bg-surface [&>th]:px-4 [&>th]:text-center [&>th]:text-[11px] [&>th]:font-semibold [&>th]:uppercase [&>th]:tracking-wide [&>th]:text-muted">
+              <th aria-hidden />
+              <th colSpan={2} className="border-l border-border">
+                Last year performance
+              </th>
+              <th colSpan={2} className="border-l border-border">
+                Next year performance
+              </th>
+              <th colSpan={2} className="border-l border-border">
+                Next 5 years performance
+              </th>
+              <th colSpan={2} className="border-l border-border">
+                150 SMA indicator
+              </th>
+              <th className="border-l border-border" />
+              <th colSpan={3} className="border-l border-border">
+                Size &amp; range
+              </th>
+              <th />
+              <th />
+            </tr>
+            <tr className="text-left [&>th]:sticky [&>th]:top-8 [&>th]:z-10 [&>th]:border-b [&>th]:border-border [&>th]:bg-surface [&>th]:px-4 [&>th]:py-3">
+              {sortHeader('Ticker', 'symbol')}
+              {sortHeader('Trailing P/E (1)', 'trailingPe', 'border-l border-border')}
+              {sortHeader('YoY EPS (3)', 'yoyPct')}
+              {sortHeader('Forward P/E', 'forwardPe', 'border-l border-border')}
+              {sortHeader('NTM EPS Growth (%)', 'fwdPct')}
+              {sortHeader('PEG (5yr exp)', 'peg5yr', 'border-l border-border')}
+              {sortHeader('EPS CAGR 5yr expected', 'epsCagr5yr')}
+              {sortHeader('SMA 150', 'sma150', 'border-l border-border')}
+              {sortHeader('% vs SMA 150', 'vsSma150')}
+              {sortHeader('Price', 'price', 'border-l border-border')}
+              {sortHeader('Market Cap', 'marketCap', 'border-l border-border')}
+              {sortHeader('All Time High', 'allTimeHigh')}
+              {sortHeader('% ATH', 'pctFromAth')}
+              <th />
+              <th className="border-l border-border text-center font-medium text-muted">Filter</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sectionRows.length === 0 ? (
+              <tr>
+                <td colSpan={15} className="px-4 py-10 text-center text-sm text-muted">
+                  No tickers match these filters.
+                </td>
+              </tr>
+            ) : (
+              sectionRows.map((r) => (
+                <tr
+                  key={r.symbol}
+                  onClick={() => router.push(`/ticker/${r.symbol}`)}
+                  onMouseEnter={() => prefetch(r.symbol)}
+                  className="cursor-pointer border-b border-border last:border-0 transition-colors hover:bg-background [&>td]:px-4 [&>td]:py-3"
+                >
+                  <td>
+                    <div className="flex items-center gap-3">
+                      <TickerLogo symbol={r.symbol} />
+                      <div>
+                        <div className="font-semibold text-foreground">{r.symbol}</div>
+                        {r.name ? <div className="text-xs text-muted">{r.name}</div> : null}
+                      </div>
+                    </div>
+                  </td>
+                  <td>
+                    <SignalChip
+                      state={r.peState}
+                      label={r.trailingPe != null ? `${r.trailingPe.toFixed(1)}×` : 'N/A'}
+                    />
+                  </td>
+                  <td>
+                    <SignalChip state={r.yoyState} label={r.yoyLabel} />
+                  </td>
+                  <td>
+                    <Badge variant="neutral" size="sm">
+                      {r.forwardPe != null ? `${r.forwardPe.toFixed(1)}×` : 'N/A'}
+                    </Badge>
+                  </td>
+                  <td>
+                    <SignalChip state={r.fwdState} label={r.fwdLabel} />
+                  </td>
+                  <td>
+                    {r.peg5yr != null ? (
+                      <Badge variant={r.peg5yr < 1 ? 'success' : 'neutral'} size="sm">
+                        {r.peg5yr.toFixed(2)}
+                      </Badge>
+                    ) : (
+                      <Badge variant="neutral" size="sm">
+                        N/A
+                      </Badge>
+                    )}
+                  </td>
+                  <td>
+                    {r.epsCagr5yr != null ? (
+                      <Badge
+                        variant={
+                          r.epsCagr5yr < 15 ? 'destructive' : r.epsCagr5yr <= 30 ? 'warning' : 'success'
+                        }
+                        size="sm"
+                      >
+                        {r.epsCagr5yr.toFixed(1)}%
+                        {r.epsCagr5yr < 15 ? '' : r.epsCagr5yr <= 30 ? ' · Good' : ' · Excellent'}
+                      </Badge>
+                    ) : (
+                      <Badge variant="neutral" size="sm">
+                        N/A
+                      </Badge>
+                    )}
+                  </td>
+                  <td>
+                    {r.sma150 != null ? (
+                      <div className="flex items-center gap-2">
+                        <span className="tabular-nums text-muted">{r.sma150.toFixed(2)}</span>
+                        {r.price != null ? (
+                          <Badge variant={r.price >= r.sma150 ? 'success' : 'destructive'} size="sm">
+                            {r.price >= r.sma150 ? 'Above' : 'Below'}
+                          </Badge>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <Badge variant="neutral" size="sm">
+                        N/A
+                      </Badge>
+                    )}
+                  </td>
+                  <td>
+                    {(() => {
+                      const v = vsSma150Pct(r)
+                      if (v == null)
+                        return (
+                          <Badge variant="neutral" size="sm">
+                            N/A
+                          </Badge>
+                        )
+                      return (
+                        <span
+                          className={
+                            'font-semibold tabular-nums ' +
+                            (v >= 0 ? 'text-emerald-600' : 'text-red-600')
+                          }
+                        >
+                          {v >= 0 ? '+' : ''}
+                          {v.toFixed(1)}%
+                        </span>
+                      )
+                    })()}
+                  </td>
+                  <td>
+                    <span className="font-semibold tabular-nums text-foreground">
+                      {r.price != null
+                        ? `$${r.price.toLocaleString(undefined, {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          })}`
+                        : 'N/A'}
+                    </span>
+                  </td>
+                  <td className="border-l border-border">
+                    <span className="tabular-nums text-foreground">{bigUsd(r.marketCap)}</span>
+                  </td>
+                  <td>
+                    <span className="tabular-nums text-muted">
+                      {r.allTimeHigh != null ? usd(r.allTimeHigh) : 'N/A'}
+                    </span>
+                  </td>
+                  <td>
+                    {r.pctFromAth == null ? (
+                      <Badge variant="neutral" size="sm">
+                        N/A
+                      </Badge>
+                    ) : (
+                      <span
+                        className={
+                          'font-semibold tabular-nums ' +
+                          (r.pctFromAth >= -5
+                            ? 'text-emerald-600'
+                            : r.pctFromAth >= -20
+                              ? 'text-amber-600'
+                              : 'text-red-600')
+                        }
+                      >
+                        {r.pctFromAth >= 0 ? '+' : ''}
+                        {r.pctFromAth.toFixed(1)}%
+                      </span>
+                    )}
+                  </td>
+                  <td onClick={(e) => e.stopPropagation()}>
+                    <RemoveTickerButton symbol={r.symbol} />
+                  </td>
+                  {checkboxCell(r.symbol)}
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  )
+
+  // Phone card list, rendered once per section over the given rows.
+  const mobileSection = (sectionRows: WatchlistRow[]) => (
+    <div className="space-y-2.5 md:hidden">
+      {sectionRows.length === 0 ? (
+        <Card className="px-4 py-10 text-center text-sm text-muted">
+          No tickers match these filters.
+        </Card>
+      ) : (
+        sectionRows.map((r) => {
+          const ath = r.pctFromAth
+          return (
+            <Card
+              key={r.symbol}
+              onClick={() => router.push(`/ticker/${r.symbol}`)}
+              onTouchStart={() => prefetch(r.symbol)}
+              className="cursor-pointer p-3.5 transition-colors active:bg-background"
+            >
+              <div className="flex items-center gap-3">
+                <TickerLogo symbol={r.symbol} />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-foreground">{r.symbol}</span>
+                    <Badge
+                      variant={r.passing >= 4 ? 'success' : r.passing >= 3 ? 'warning' : 'neutral'}
+                      size="sm"
+                    >
+                      {r.passing}/{r.scored}
+                    </Badge>
+                  </div>
+                  {r.name ? <div className="truncate text-xs text-muted">{r.name}</div> : null}
+                </div>
+                <div className="shrink-0 text-right">
+                  <div className="font-semibold tabular-nums text-foreground">
+                    {r.price != null
+                      ? `$${r.price.toLocaleString(undefined, {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}`
+                      : 'N/A'}
+                  </div>
+                  <div className="text-[11px] tabular-nums text-muted">{bigUsd(r.marketCap)}</div>
+                </div>
+                <label
+                  className="shrink-0 cursor-pointer p-1"
+                  onClick={(e) => e.stopPropagation()}
+                  aria-label={
+                    checked.has(r.symbol)
+                      ? `Remove ${r.symbol} from Filtered Stocks`
+                      : `Add ${r.symbol} to Filtered Stocks`
+                  }
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked.has(r.symbol)}
+                    onChange={() => toggleChecked(r.symbol)}
+                    className="h-4 w-4 cursor-pointer accent-primary align-middle"
+                  />
+                </label>
+                <div className="-mr-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+                  <RemoveTickerButton symbol={r.symbol} />
+                </div>
+              </div>
+
+              <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2.5 border-t border-border pt-3">
+                <MobileStat label="Trailing P/E (1)">
+                  <SignalChip
+                    state={r.peState}
+                    label={r.trailingPe != null ? `${r.trailingPe.toFixed(1)}×` : 'N/A'}
+                  />
+                </MobileStat>
+                <MobileStat label="Forward P/E">
+                  <Badge variant="neutral" size="sm">
+                    {r.forwardPe != null ? `${r.forwardPe.toFixed(1)}×` : 'N/A'}
+                  </Badge>
+                </MobileStat>
+                <MobileStat label="YoY EPS (3)">
+                  <SignalChip state={r.yoyState} label={r.yoyLabel} />
+                </MobileStat>
+                <MobileStat label="NTM EPS growth">
+                  <SignalChip state={r.fwdState} label={r.fwdLabel} />
+                </MobileStat>
+                <MobileStat label="PEG (5yr exp)">
+                  <span className={r.peg5yr != null && r.peg5yr < 1 ? 'text-emerald-600' : undefined}>
+                    {r.peg5yr != null ? r.peg5yr.toFixed(2) : 'N/A'}
+                  </span>
+                </MobileStat>
+                <MobileStat label="EPS CAGR 5yr exp">
+                  {r.epsCagr5yr == null ? (
+                    'N/A'
+                  ) : (
+                    <span
+                      className={
+                        r.epsCagr5yr < 15
+                          ? 'text-red-600'
+                          : r.epsCagr5yr <= 30
+                            ? 'text-amber-600'
+                            : 'text-emerald-600'
+                      }
+                    >
+                      {r.epsCagr5yr.toFixed(1)}%
+                    </span>
+                  )}
+                </MobileStat>
+                <MobileStat label="% ATH">
+                  {ath == null ? (
+                    'N/A'
+                  ) : (
+                    <span
+                      className={
+                        ath >= -5 ? 'text-emerald-600' : ath >= -20 ? 'text-amber-600' : 'text-red-600'
+                      }
+                    >
+                      {ath >= 0 ? '+' : ''}
+                      {ath.toFixed(1)}%
+                    </span>
+                  )}
+                </MobileStat>
+                <MobileStat label="% vs SMA 150">
+                  {(() => {
+                    const v = vsSma150Pct(r)
+                    if (v == null) return 'N/A'
+                    return (
+                      <span className={v >= 0 ? 'text-emerald-600' : 'text-red-600'}>
+                        {v >= 0 ? '+' : ''}
+                        {v.toFixed(1)}%
+                      </span>
+                    )
+                  })()}
+                </MobileStat>
+              </div>
+            </Card>
+          )
+        })
+      )}
+    </div>
+  )
+
+  // Section heading shown above each table (both breakpoints).
+  const sectionHeading = (title: string, count: number) => (
+    <div className="flex items-baseline gap-2">
+      <h2 className="text-sm font-semibold uppercase tracking-wide text-foreground">{title}</h2>
+      <span className="text-xs text-muted">{count}</span>
+    </div>
+  )
 
   return (
     <div className="space-y-3">
@@ -412,328 +825,23 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
         </span>
       </div>
 
-      {/* Desktop / tablet: the full sortable table. Hidden on phones, where the
-          14 columns are unreadable — the card list below takes over there. */}
-      <Card className="hidden overflow-hidden md:block">
-        {/* Scroll the table within its own region (capped to the viewport) so
-            the header row can stay frozen at the top as you scroll the data. */}
-        <div className="max-h-[calc(100vh-6rem)] overflow-auto">
-          <table className="w-full text-sm">
-            <thead>
-              {/* Grouping band — spans the columns beneath each time horizon. */}
-              <tr className="[&>th]:sticky [&>th]:top-0 [&>th]:z-10 [&>th]:h-8 [&>th]:bg-surface [&>th]:px-4 [&>th]:text-center [&>th]:text-[11px] [&>th]:font-semibold [&>th]:uppercase [&>th]:tracking-wide [&>th]:text-muted">
-                <th aria-hidden />
-                <th colSpan={2} className="border-l border-border">
-                  Last year performance
-                </th>
-                <th colSpan={2} className="border-l border-border">
-                  Next year performance
-                </th>
-                <th colSpan={2} className="border-l border-border">
-                  Next 5 years performance
-                </th>
-                <th colSpan={2} className="border-l border-border">
-                  150 SMA indicator
-                </th>
-                <th className="border-l border-border" />
-                <th colSpan={3} className="border-l border-border">
-                  Size &amp; range
-                </th>
-                <th />
-              </tr>
-              <tr className="text-left [&>th]:sticky [&>th]:top-8 [&>th]:z-10 [&>th]:border-b [&>th]:border-border [&>th]:bg-surface [&>th]:px-4 [&>th]:py-3">
-                {sortHeader('Ticker', 'symbol')}
-                {sortHeader('Trailing P/E (1)', 'trailingPe', 'border-l border-border')}
-                {sortHeader('YoY EPS (3)', 'yoyPct')}
-                {sortHeader('Forward P/E', 'forwardPe', 'border-l border-border')}
-                {sortHeader('NTM EPS Growth (%)', 'fwdPct')}
-                {sortHeader('PEG (5yr exp)', 'peg5yr', 'border-l border-border')}
-                {sortHeader('EPS CAGR 5yr expected', 'epsCagr5yr')}
-                {sortHeader('SMA 150', 'sma150', 'border-l border-border')}
-                {sortHeader('% vs SMA 150', 'vsSma150')}
-                {sortHeader('Price', 'price', 'border-l border-border')}
-                {sortHeader('Market Cap', 'marketCap', 'border-l border-border')}
-                {sortHeader('All Time High', 'allTimeHigh')}
-                {sortHeader('% ATH', 'pctFromAth')}
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {sorted.length === 0 ? (
-                <tr>
-                  <td colSpan={14} className="px-4 py-10 text-center text-sm text-muted">
-                    No tickers match these filters.
-                  </td>
-                </tr>
-              ) : (
-                sorted.map((r) => (
-                  <tr
-                    key={r.symbol}
-                    onClick={() => router.push(`/ticker/${r.symbol}`)}
-                    onMouseEnter={() => prefetch(r.symbol)}
-                    className="cursor-pointer border-b border-border last:border-0 transition-colors hover:bg-background [&>td]:px-4 [&>td]:py-3"
-                  >
-                    <td>
-                      <div className="flex items-center gap-3">
-                        <TickerLogo symbol={r.symbol} />
-                        <div>
-                          <div className="font-semibold text-foreground">{r.symbol}</div>
-                          {r.name ? <div className="text-xs text-muted">{r.name}</div> : null}
-                        </div>
-                      </div>
-                    </td>
-                    <td>
-                      <SignalChip
-                        state={r.peState}
-                        label={r.trailingPe != null ? `${r.trailingPe.toFixed(1)}×` : 'N/A'}
-                      />
-                    </td>
-                    <td>
-                      <SignalChip state={r.yoyState} label={r.yoyLabel} />
-                    </td>
-                    <td>
-                      <Badge variant="neutral" size="sm">
-                        {r.forwardPe != null ? `${r.forwardPe.toFixed(1)}×` : 'N/A'}
-                      </Badge>
-                    </td>
-                    <td>
-                      <SignalChip state={r.fwdState} label={r.fwdLabel} />
-                    </td>
-                    <td>
-                      {r.peg5yr != null ? (
-                        <Badge variant={r.peg5yr < 1 ? 'success' : 'neutral'} size="sm">
-                          {r.peg5yr.toFixed(2)}
-                        </Badge>
-                      ) : (
-                        <Badge variant="neutral" size="sm">
-                          N/A
-                        </Badge>
-                      )}
-                    </td>
-                    <td>
-                      {r.epsCagr5yr != null ? (
-                        <Badge
-                          variant={
-                            r.epsCagr5yr < 15 ? 'destructive' : r.epsCagr5yr <= 30 ? 'warning' : 'success'
-                          }
-                          size="sm"
-                        >
-                          {r.epsCagr5yr.toFixed(1)}%
-                          {r.epsCagr5yr < 15 ? '' : r.epsCagr5yr <= 30 ? ' · Good' : ' · Excellent'}
-                        </Badge>
-                      ) : (
-                        <Badge variant="neutral" size="sm">
-                          N/A
-                        </Badge>
-                      )}
-                    </td>
-                    <td>
-                      {r.sma150 != null ? (
-                        <div className="flex items-center gap-2">
-                          <span className="tabular-nums text-muted">{r.sma150.toFixed(2)}</span>
-                          {r.price != null ? (
-                            <Badge variant={r.price >= r.sma150 ? 'success' : 'destructive'} size="sm">
-                              {r.price >= r.sma150 ? 'Above' : 'Below'}
-                            </Badge>
-                          ) : null}
-                        </div>
-                      ) : (
-                        <Badge variant="neutral" size="sm">
-                          N/A
-                        </Badge>
-                      )}
-                    </td>
-                    <td>
-                      {(() => {
-                        const v = vsSma150Pct(r)
-                        if (v == null)
-                          return (
-                            <Badge variant="neutral" size="sm">
-                              N/A
-                            </Badge>
-                          )
-                        return (
-                          <span
-                            className={
-                              'font-semibold tabular-nums ' +
-                              (v >= 0 ? 'text-emerald-600' : 'text-red-600')
-                            }
-                          >
-                            {v >= 0 ? '+' : ''}
-                            {v.toFixed(1)}%
-                          </span>
-                        )
-                      })()}
-                    </td>
-                    <td>
-                      <span className="font-semibold tabular-nums text-foreground">
-                        {r.price != null
-                          ? `$${r.price.toLocaleString(undefined, {
-                              minimumFractionDigits: 2,
-                              maximumFractionDigits: 2,
-                            })}`
-                          : 'N/A'}
-                      </span>
-                    </td>
-                    <td className="border-l border-border">
-                      <span className="tabular-nums text-foreground">{bigUsd(r.marketCap)}</span>
-                    </td>
-                    <td>
-                      <span className="tabular-nums text-muted">
-                        {r.allTimeHigh != null ? usd(r.allTimeHigh) : 'N/A'}
-                      </span>
-                    </td>
-                    <td>
-                      {r.pctFromAth == null ? (
-                        <Badge variant="neutral" size="sm">
-                          N/A
-                        </Badge>
-                      ) : (
-                        <span
-                          className={
-                            'font-semibold tabular-nums ' +
-                            (r.pctFromAth >= -5
-                              ? 'text-emerald-600'
-                              : r.pctFromAth >= -20
-                                ? 'text-amber-600'
-                                : 'text-red-600')
-                          }
-                        >
-                          {r.pctFromAth >= 0 ? '+' : ''}
-                          {r.pctFromAth.toFixed(1)}%
-                        </span>
-                      )}
-                    </td>
-                    <td onClick={(e) => e.stopPropagation()}>
-                      <RemoveTickerButton symbol={r.symbol} />
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </Card>
+      {/* Two tables, same columns. Ticked rows float up into "Filtered Stocks";
+          the rest stay in "Watchlist". Both share the filter/sort state above —
+          the checkbox only decides which table a row lands in. Each section
+          renders a desktop table (md+) and a phone card list. */}
+      {filteredStocks.length > 0 ? (
+        <section className="space-y-2.5">
+          {sectionHeading('Filtered Stocks', filteredStocks.length)}
+          {desktopSection(filteredStocks)}
+          {mobileSection(filteredStocks)}
+        </section>
+      ) : null}
 
-      {/* Phone: one tappable card per ticker — the essentials only, no sideways
-          scroll. Shares the same filtered/sorted list as the table above. */}
-      <div className="space-y-2.5 md:hidden">
-        {sorted.length === 0 ? (
-          <Card className="px-4 py-10 text-center text-sm text-muted">
-            No tickers match these filters.
-          </Card>
-        ) : (
-          sorted.map((r) => {
-            const ath = r.pctFromAth
-            return (
-              <Card
-                key={r.symbol}
-                onClick={() => router.push(`/ticker/${r.symbol}`)}
-                onTouchStart={() => prefetch(r.symbol)}
-                className="cursor-pointer p-3.5 transition-colors active:bg-background"
-              >
-                <div className="flex items-center gap-3">
-                  <TickerLogo symbol={r.symbol} />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="font-semibold text-foreground">{r.symbol}</span>
-                      <Badge
-                        variant={r.passing >= 4 ? 'success' : r.passing >= 3 ? 'warning' : 'neutral'}
-                        size="sm"
-                      >
-                        {r.passing}/{r.scored}
-                      </Badge>
-                    </div>
-                    {r.name ? <div className="truncate text-xs text-muted">{r.name}</div> : null}
-                  </div>
-                  <div className="shrink-0 text-right">
-                    <div className="font-semibold tabular-nums text-foreground">
-                      {r.price != null
-                        ? `$${r.price.toLocaleString(undefined, {
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 2,
-                          })}`
-                        : 'N/A'}
-                    </div>
-                    <div className="text-[11px] tabular-nums text-muted">{bigUsd(r.marketCap)}</div>
-                  </div>
-                  <div className="-mr-1 shrink-0" onClick={(e) => e.stopPropagation()}>
-                    <RemoveTickerButton symbol={r.symbol} />
-                  </div>
-                </div>
-
-                <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2.5 border-t border-border pt-3">
-                  <MobileStat label="Trailing P/E (1)">
-                    <SignalChip
-                      state={r.peState}
-                      label={r.trailingPe != null ? `${r.trailingPe.toFixed(1)}×` : 'N/A'}
-                    />
-                  </MobileStat>
-                  <MobileStat label="Forward P/E">
-                    <Badge variant="neutral" size="sm">
-                      {r.forwardPe != null ? `${r.forwardPe.toFixed(1)}×` : 'N/A'}
-                    </Badge>
-                  </MobileStat>
-                  <MobileStat label="YoY EPS (3)">
-                    <SignalChip state={r.yoyState} label={r.yoyLabel} />
-                  </MobileStat>
-                  <MobileStat label="NTM EPS growth">
-                    <SignalChip state={r.fwdState} label={r.fwdLabel} />
-                  </MobileStat>
-                  <MobileStat label="PEG (5yr exp)">
-                    <span className={r.peg5yr != null && r.peg5yr < 1 ? 'text-emerald-600' : undefined}>
-                      {r.peg5yr != null ? r.peg5yr.toFixed(2) : 'N/A'}
-                    </span>
-                  </MobileStat>
-                  <MobileStat label="EPS CAGR 5yr exp">
-                    {r.epsCagr5yr == null ? (
-                      'N/A'
-                    ) : (
-                      <span
-                        className={
-                          r.epsCagr5yr < 15
-                            ? 'text-red-600'
-                            : r.epsCagr5yr <= 30
-                              ? 'text-amber-600'
-                              : 'text-emerald-600'
-                        }
-                      >
-                        {r.epsCagr5yr.toFixed(1)}%
-                      </span>
-                    )}
-                  </MobileStat>
-                  <MobileStat label="% ATH">
-                    {ath == null ? (
-                      'N/A'
-                    ) : (
-                      <span
-                        className={
-                          ath >= -5 ? 'text-emerald-600' : ath >= -20 ? 'text-amber-600' : 'text-red-600'
-                        }
-                      >
-                        {ath >= 0 ? '+' : ''}
-                        {ath.toFixed(1)}%
-                      </span>
-                    )}
-                  </MobileStat>
-                  <MobileStat label="% vs SMA 150">
-                    {(() => {
-                      const v = vsSma150Pct(r)
-                      if (v == null) return 'N/A'
-                      return (
-                        <span className={v >= 0 ? 'text-emerald-600' : 'text-red-600'}>
-                          {v >= 0 ? '+' : ''}
-                          {v.toFixed(1)}%
-                        </span>
-                      )
-                    })()}
-                  </MobileStat>
-                </div>
-              </Card>
-            )
-          })
-        )}
-      </div>
+      <section className="space-y-2.5">
+        {sectionHeading('Watchlist', watchlistStocks.length)}
+        {desktopSection(watchlistStocks)}
+        {mobileSection(watchlistStocks)}
+      </section>
 
       {/* Hebrew help tooltip — fixed to the viewport so it never gets clipped. */}
       {tip ? (
