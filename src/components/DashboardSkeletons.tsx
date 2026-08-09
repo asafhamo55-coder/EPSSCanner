@@ -1,20 +1,34 @@
 import { Card, Skeleton } from '@/ui'
 
-/** Placeholder for the key-indices strip — mirrors the four divided columns of
- *  IndicesPanel (name row, YTD figure, PE/EPS footnote) so the swap to real
- *  data doesn't shift layout. */
+/** Placeholder for the key-indices panel — mirrors both IndicesPanel layouts
+ *  (desktop's four divided columns, phone's 2×2 grid of stacked stat rows) so
+ *  the swap to real data doesn't shift layout at either breakpoint. */
 export function IndicesPanelSkeleton() {
   return (
     <Card className="overflow-hidden p-0">
-      <div className="flex min-w-max divide-x divide-border">
+      <div className="grid grid-cols-2 md:flex md:min-w-max md:divide-x md:divide-border">
         {Array.from({ length: 4 }).map((_, i) => (
-          <div key={i} className="flex-1 whitespace-nowrap px-5 py-3.5">
+          <div
+            key={i}
+            className={`px-3.5 py-3.5 md:flex-1 md:whitespace-nowrap md:px-5 ${
+              i % 2 === 0 ? 'border-r border-border md:border-r-0' : ''
+            } ${i < 2 ? 'border-b border-border md:border-b-0' : ''}`}
+          >
             <div className="flex items-center gap-2">
               <Skeleton className="h-2.5 w-2.5 rounded-full" />
               <Skeleton className="h-5 w-28" />
             </div>
+            <Skeleton className="mt-1 h-3 w-20 md:hidden" />
             <Skeleton className="mt-1.5 h-7 w-24" />
-            <Skeleton className="mt-2 h-3 w-40" />
+            <Skeleton className="mt-2 hidden h-4 w-40 md:block" />
+            <div className="mt-2.5 space-y-1.5 border-t border-border pt-2.5 md:hidden">
+              {Array.from({ length: 4 }).map((_, j) => (
+                <div key={j} className="flex items-baseline justify-between gap-2">
+                  <Skeleton className="h-3 w-10" />
+                  <Skeleton className="h-4 w-12" />
+                </div>
+              ))}
+            </div>
           </div>
         ))}
       </div>
