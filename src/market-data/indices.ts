@@ -64,14 +64,17 @@ const INDICES: IndexConfig[] = [
     seed: { ytdPct: 8.4, trailingPe: 25.5, forwardPe: 21.8, eps2026: '+24%', eps2027: '+13–15%' },
   },
   {
-    // TA-35 has no clean free index symbol / ETF proxy on Yahoo, so its figures
-    // stay on the seeded research values rather than risk fetching the wrong
-    // index (e.g. TA-125).
+    // TA-35 quotes on Yahoo as `TA35.TA` (TLV, ILS) — an exact match for the
+    // index, so YTD is live like the US indices. There is no PE proxy though:
+    // the index carries no PE, the TASE trackers (Harel Sal 4A, Tachlit 40,
+    // KSM) all report `trailingPE: null`, and the only Israel ETFs Yahoo does
+    // price a PE for (EIS, ISRA) track MSCI/VanEck Israel — a broader universe
+    // than the TA-35 — so its PEs stay on the seeded research values.
     key: 'ta35',
     name: 'TA-35',
     region: 'Israel · Large Cap',
     accent: 'sky',
-    indexSymbol: null,
+    indexSymbol: 'TA35.TA',
     peProxy: null,
     seed: { ytdPct: 14.2, trailingPe: 22.5, forwardPe: 20.5, eps2026: '+8–10%', eps2027: '+8–10%' },
   },
