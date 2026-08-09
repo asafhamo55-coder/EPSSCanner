@@ -670,13 +670,13 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
                     label={r.trailingPe != null ? `${r.trailingPe.toFixed(1)}×` : 'N/A'}
                   />
                 </MobileStat>
+                <MobileStat label="YoY EPS (3)">
+                  <SignalChip state={r.yoyState} label={r.yoyLabel} />
+                </MobileStat>
                 <MobileStat label="Forward P/E">
                   <Badge variant="neutral" size="sm">
                     {r.forwardPe != null ? `${r.forwardPe.toFixed(1)}×` : 'N/A'}
                   </Badge>
-                </MobileStat>
-                <MobileStat label="YoY EPS (3)">
-                  <SignalChip state={r.yoyState} label={r.yoyLabel} />
                 </MobileStat>
                 <MobileStat label="NTM EPS growth">
                   <SignalChip state={r.fwdState} label={r.fwdLabel} />
