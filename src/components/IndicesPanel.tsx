@@ -34,7 +34,7 @@ export async function IndicesPanel() {
                 </span>
                 <span className="text-xs font-medium text-muted">YTD</span>
               </div>
-              <div className="mt-1.5 text-xs tabular-nums text-muted">
+              <div className="mt-1.5 text-sm tabular-nums text-muted">
                 P/E {ratio(d.trailingPe, 1)} · Fwd {ratio(d.forwardPe, 1)} · EPS ’26 {d.eps2026} · ’27{' '}
                 {d.eps2027}
               </div>
