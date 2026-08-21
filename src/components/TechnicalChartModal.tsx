@@ -32,11 +32,20 @@ export function TechnicalChartModal({
     if (!open) return
     let cancelled = false
     setState({ status: 'loading' })
-    // getTechnicals never throws — it resolves null on any failure.
-    getTechnicals(symbol).then((data) => {
-      if (cancelled) return
-      setState(data ? { status: 'ready', data } : { status: 'error' })
-    })
+    // The action's own body can't throw — it resolves null on any failure. But
+    // this is a server action called over the wire, so the RPC itself still
+    // rejects on network loss, a 500, or deployment skew; without the catch the
+    // modal would sit on the skeleton forever and React would log an unhandled
+    // rejection.
+    getTechnicals(symbol)
+      .then((data) => {
+        if (cancelled) return
+        setState(data ? { status: 'ready', data } : { status: 'error' })
+      })
+      .catch(() => {
+        if (cancelled) return
+        setState({ status: 'error' })
+      })
     return () => {
       cancelled = true
     }

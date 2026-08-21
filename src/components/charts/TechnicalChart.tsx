@@ -137,6 +137,14 @@ export function TechnicalChart({ data, symbol }: { data: Technicals; symbol: str
           name: 'Channel lower',
           type: 'line',
           stack: 'channel',
+          // ECharts' default 'samesign' strategy refuses to stack a positive
+          // band height onto a negative baseline and silently restarts the
+          // stack at 0 — which would draw the tunnel at 0..(upper-lower)
+          // instead of lower..upper. `lower = mid - 2σ` can go negative on a
+          // low-priced, high-residual name, and the result looks plausible
+          // while being in entirely the wrong place. 'all' stacks regardless
+          // of sign.
+          stackStrategy: 'all',
           data: channel.lower,
           symbol: 'none',
           lineStyle: { width: 1, type: 'dashed', color: tokens.screener.muted },
@@ -147,6 +155,7 @@ export function TechnicalChart({ data, symbol }: { data: Technicals; symbol: str
           name: 'Regression channel (±2σ)',
           type: 'line',
           stack: 'channel',
+          stackStrategy: 'all',
           data: bandHeights,
           symbol: 'none',
           lineStyle: { width: 1, type: 'dashed', color: tokens.screener.muted },

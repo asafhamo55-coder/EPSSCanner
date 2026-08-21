@@ -388,18 +388,19 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
 
   // Opens the technical chart. Shared by both layouts; each call site wraps it
   // in its own stopPropagation guard so the row's navigate-to-ticker handler
-  // doesn't also fire.
-  const chartButton = (symbol: string) => (
+  // doesn't also fire. The desktop cell is icon-only to match the remove button
+  // next to it; the phone card labels it, since it sits alone in a footer row
+  // where a bare icon would read as decoration.
+  const chartButton = (symbol: string, label?: string) => (
     <Button
       variant="ghost"
       size="sm"
-      // px-2 rather than the size's px-3: the phone card's header row already
-      // packs logo, name, price, checkbox and remove into ~360px.
       className="px-2"
       onClick={() => setChartSymbol(symbol)}
       aria-label={`Open technical chart for ${symbol}`}
     >
       <LineChart className="h-4 w-4" />
+      {label}
     </Button>
   )
 
@@ -696,9 +697,6 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
                     className="h-4 w-4 cursor-pointer accent-primary align-middle"
                   />
                 </label>
-                <div className="shrink-0" onClick={(e) => e.stopPropagation()}>
-                  {chartButton(r.symbol)}
-                </div>
                 <div className="-mr-1 shrink-0" onClick={(e) => e.stopPropagation()}>
                   <RemoveTickerButton symbol={r.symbol} />
                 </div>
@@ -770,6 +768,18 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
                     )
                   })()}
                 </MobileStat>
+              </div>
+
+              {/* The chart action lives here rather than in the header row: at
+                  360px the header's logo + name + price + checkbox + remove
+                  already leave the symbol/score line barely enough width, and
+                  that line has no min-w-0 to truncate into, so a sixth control
+                  would make it collide with the price instead of shrinking. */}
+              <div
+                className="-mb-1 mt-1.5 flex justify-end"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {chartButton(r.symbol, 'Technical chart')}
               </div>
             </Card>
           )
