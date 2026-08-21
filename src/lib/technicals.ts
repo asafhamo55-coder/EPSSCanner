@@ -13,8 +13,11 @@ import type { Bar } from '@/market-data/provider'
 export const WARMUP_BARS = 150
 /** Bars actually charted. */
 export const VISIBLE_BARS = 126
-/** What the fetch layer should request: warmup + visible, no slack — Yahoo
- *  returns exactly what's asked and we slice locally. */
+/** What the fetch layer should request: warmup + visible. Strictly only 149
+ *  bars are needed ahead of the visible window — visible index 0 maps to
+ *  absolute index 150, whose SMA window is `bars[1..150]`, so `bars[0]` is
+ *  never read — meaning FETCH_BARS carries exactly one bar of slack, not
+ *  zero. Yahoo returns exactly what's asked and we slice locally. */
 export const FETCH_BARS = WARMUP_BARS + VISIBLE_BARS
 export const SMA_PERIOD = 150
 /** Regression-channel half-width in standard deviations of the residuals. */
@@ -73,6 +76,10 @@ export interface Technicals {
   gaps: Gap[]
   verdict: Verdict
   positionPct: number | null
+  /** `visible.length`, surfaced explicitly so the UI never has to infer a
+   *  short-history window from array length — a channel built on fewer than
+   *  VISIBLE_BARS bars is still a full-confidence-looking verdict otherwise. */
+  windowBars: number
 }
 
 // ─── SMA ─────────────────────────────────────────────────────────────
@@ -323,5 +330,5 @@ export function analyze(bars: Bar[]): Technicals {
   const positionPct = channel ? channel.positionPct : null
   const verdict: Verdict = channel ? verdictFor(channel.positionPct) : 'insufficient-history'
 
-  return { visible, sma150, channel, fib, gaps, verdict, positionPct }
+  return { visible, sma150, channel, fib, gaps, verdict, positionPct, windowBars: visible.length }
 }

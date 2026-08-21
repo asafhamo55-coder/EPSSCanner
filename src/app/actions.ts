@@ -134,7 +134,14 @@ export async function removeTickerAction(symbol: string): Promise<ActionResult> 
 }
 
 /** Chart data for the technical analysis modal. Fetched on demand — the modal
- *  calls this itself rather than the page preloading it for every watchlist row. */
+ *  calls this itself rather than the page preloading it for every watchlist row.
+ *  Public POST endpoint with no auth in front of it, so the symbol must be
+ *  validated the same way as `prefillEvaluation` above: an unvalidated string
+ *  here is an unbounded `unstable_cache` key generator and an outbound Yahoo
+ *  request per garbage value, which risks rate-limiting/IP-banning the
+ *  deployment for `liveSma150`, `liveAth` and `livePeg` too. */
 export async function getTechnicals(symbol: string): Promise<Technicals | null> {
-  return liveTechnicals(symbol)
+  const sym = symbol.trim().toUpperCase()
+  if (!/^[A-Z][A-Z0-9.\-]{0,9}$/.test(sym)) return null
+  return liveTechnicals(sym)
 }

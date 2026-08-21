@@ -4,7 +4,7 @@ import { useMemo } from 'react'
 import ReactECharts from 'echarts-for-react'
 import { tokens } from '@/ui'
 import { usd } from '@/lib/format'
-import type { Technicals, Verdict } from '@/lib/technicals'
+import { VISIBLE_BARS, type Technicals, type Verdict } from '@/lib/technicals'
 
 // Daily candlestick with the regression tunnel, the 150-day SMA, Fibonacci
 // retracement levels and any still-open gaps, under a verdict banner.
@@ -50,7 +50,7 @@ function signedPct(v: number): string {
 }
 
 export function TechnicalChart({ data, symbol }: { data: Technicals; symbol: string }) {
-  const { visible, sma150, channel, fib, gaps, verdict, positionPct } = data
+  const { visible, sma150, channel, fib, gaps, verdict, positionPct, windowBars } = data
 
   const option = useMemo(() => {
     const labels = visible.map((b) => dayLabel(b.t))
@@ -234,6 +234,10 @@ export function TechnicalChart({ data, symbol }: { data: Technicals; symbol: str
 
   const meterPct = positionPct != null ? Math.min(100, Math.max(0, positionPct)) : null
   const showPct = verdict !== 'insufficient-history' && positionPct != null
+  // A channel built on fewer than VISIBLE_BARS bars renders identically to a
+  // full 126-bar one otherwise — surface the true window size so a short
+  // history reads as short, not as full confidence.
+  const isShortWindow = windowBars < VISIBLE_BARS
 
   return (
     <div className="space-y-3">
@@ -243,6 +247,7 @@ export function TechnicalChart({ data, symbol }: { data: Technicals; symbol: str
           {showPct ? (
             <span className="text-sm font-semibold tabular-nums">
               {Math.round(positionPct)}% of tunnel height
+              {isShortWindow ? ` · ${windowBars} bars of history` : null}
             </span>
           ) : null}
         </div>

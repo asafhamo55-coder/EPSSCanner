@@ -280,6 +280,46 @@ async function main() {
     'computeFib: high >= low always holds (window fallback is max/min over the window, never inverted)',
   )
 
+  // ── Technicals: computeFib swing anchor (rally + decline) ────────
+  // Both branches below matter: a live run of the pipeline against 12 real
+  // tickers returned anchor: 'swing' 12/12 (5 rally, 7 decline) — the
+  // fallback tested above is the rare path, this is the one every real
+  // verdict is actually built on.
+  console.log('\nTechnicals — computeFib swing anchor')
+
+  // Reuses pivotBars from the findPivots section above (already asserted
+  // there: confirmed low at index 5 → l=50, confirmed high at index 10 →
+  // h=150). Swing = (150-50)/50*100 = 200% >= MIN_SWING_PCT, and the high is
+  // more recent than the low → direction 'rally'.
+  const rallyFib = computeFib(pivotBars)
+  eq(rallyFib?.anchor ?? 'MISSING', 'swing', 'computeFib rally: anchors on the confirmed swing, not the window fallback')
+  eq(rallyFib?.direction ?? 'MISSING', 'rally', 'computeFib rally: high (idx 10) more recent than low (idx 5) → rally')
+  // Hand arithmetic: rally level = high - (high-low)*ratio = 150 - (150-50)*0.618 = 150 - 61.8 = 88.2
+  const rally618 = rallyFib?.levels.find((l) => l.ratio === 0.618)
+  approx(rally618?.price ?? null, 88.2, 1e-9, 'computeFib rally: 0.618 level = 150 - 100*0.618 = 88.2')
+
+  // Mirror image of pivotBars: confirmed peak at index 5 (h=150), confirmed
+  // trough at index 10 (l=40), everything else flat at the same baseline
+  // (h=100, l=90) so nothing else in the window can confirm. The low is more
+  // recent than the high → direction 'decline'.
+  const declineBars: Bar[] = []
+  for (let i = 0; i < 20; i++) {
+    let h = 100, l = 90
+    if (i === 5) h = 150 // confirmed peak
+    if (i === 10) l = 40 // confirmed trough
+    declineBars.push({ t: i, o: h, h, l, c: l })
+  }
+  const declinePivots = findPivots(declineBars, PIVOT_K)
+  eq(JSON.stringify(declinePivots.highs), JSON.stringify([5]), 'computeFib decline fixture: single confirmed peak at index 5')
+  eq(JSON.stringify(declinePivots.lows), JSON.stringify([10]), 'computeFib decline fixture: single confirmed trough at index 10')
+
+  const declineFib = computeFib(declineBars)
+  eq(declineFib?.anchor ?? 'MISSING', 'swing', 'computeFib decline: anchors on the confirmed swing, not the window fallback')
+  eq(declineFib?.direction ?? 'MISSING', 'decline', 'computeFib decline: low (idx 10) more recent than high (idx 5) → decline')
+  // Hand arithmetic: decline level = low + (high-low)*ratio = 40 + (150-40)*0.618 = 40 + 67.98 = 107.98
+  const decline618 = declineFib?.levels.find((l) => l.ratio === 0.618)
+  approx(decline618?.price ?? null, 107.98, 1e-9, 'computeFib decline: 0.618 level = 40 + 110*0.618 = 107.98')
+
   // ── Technicals: findGaps ─────────────────────────────────────────
   console.log('\nTechnicals — findGaps')
   const mkBar = (t: number, h: number, l: number): Bar => ({ t, o: (h + l) / 2, h, l, c: (h + l) / 2 })
