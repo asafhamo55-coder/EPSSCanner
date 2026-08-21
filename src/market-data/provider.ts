@@ -38,6 +38,15 @@ export interface AnnualRow {
   netIncome: number | null
 }
 
+/** One daily OHLC bar. `t` is a unix-seconds timestamp (Yahoo's native form). */
+export interface Bar {
+  t: number
+  o: number
+  h: number
+  l: number
+  c: number
+}
+
 export interface DataProvider {
   /** Symbol display name + currency, for the watchlist row header. */
   getProfile(symbol: string): Promise<{ name: string | null; currency: string | null }>

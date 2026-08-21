@@ -1,5 +1,6 @@
 import type {
   AnnualRow,
+  Bar,
   DataProvider,
   EpsRow,
   ValuationSnapshot,
@@ -338,6 +339,60 @@ export class YahooProvider implements DataProvider {
     if (valid.length < period) return null
     const window = valid.slice(-period)
     return window.reduce((sum, c) => sum + c, 0) / window.length
+  }
+
+  /** Last `count` daily OHLC bars, ascending by time, from Yahoo's keyless
+   *  chart endpoint. `range=2y` (not `1y`) because `1y` returns only ~252
+   *  bars and callers need up to 276 (150 SMA warmup + 126 visible). Rows
+   *  with a null timestamp or any null/non-finite OHLC leg are dropped
+   *  entirely — Yahoo emits null rows for halted sessions, and a null in one
+   *  leg corrupts every downstream calc. Returns fewer than `count` bars if
+   *  that's all that's available; returns `[]` if Yahoo has no data at all. */
+  async getDailyBars(symbol: string, count: number): Promise<Bar[]> {
+    const url = new URL(`${CHART_BASE}/${encodeURIComponent(symbol)}`)
+    url.searchParams.set('range', '2y')
+    url.searchParams.set('interval', '1d')
+    const res = await fetch(url, {
+      headers: { 'User-Agent': UA, accept: 'application/json' },
+    })
+    if (!res.ok) throw new ProviderError(`Yahoo chart → ${res.status}`, symbol, res.status)
+    const json = (await res.json()) as {
+      chart?: {
+        result?: {
+          timestamp?: (number | null)[]
+          indicators?: {
+            quote?: {
+              open?: (number | null)[]
+              high?: (number | null)[]
+              low?: (number | null)[]
+              close?: (number | null)[]
+            }[]
+          }
+        }[]
+      }
+    }
+    const r = json.chart?.result?.[0]
+    if (!r) return []
+
+    const timestamps = r.timestamp ?? []
+    const q = r.indicators?.quote?.[0] ?? {}
+    const opens = q.open ?? []
+    const highs = q.high ?? []
+    const lows = q.low ?? []
+    const closes = q.close ?? []
+
+    const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
+    const bars: Bar[] = []
+    for (let i = 0; i < timestamps.length; i++) {
+      const t = timestamps[i]
+      const o = opens[i]
+      const h = highs[i]
+      const l = lows[i]
+      const c = closes[i]
+      if (!isNum(t) || !isNum(o) || !isNum(h) || !isNum(l) || !isNum(c)) continue
+      bars.push({ t, o, h, l, c })
+    }
+    return bars.slice(-count)
   }
 
   /** All-time high price, from Yahoo's keyless chart endpoint over the full
