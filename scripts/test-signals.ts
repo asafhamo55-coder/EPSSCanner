@@ -26,6 +26,7 @@ import { MockProvider } from '../src/market-data/index'
 import { forwardPeFromTrend } from '../src/market-data/providers/yahoo'
 import {
   analyze,
+  buildChannel,
   computeFib,
   findGaps,
   findPivots,
@@ -160,33 +161,57 @@ async function main() {
   eq(verdictFor(30), 'opportunity', 'positionPct 30 → opportunity (boundary, inclusive)')
   eq(verdictFor(30.01), 'fair', 'positionPct 30.01 → fair (just over boundary)')
 
-  // ── Technicals: channel positionPct ─────────────────────────────
-  console.log('\nTechnicals — channel positionPct')
+  // ── Technicals: channel math (hand-derived, not bisected) ────────
+  console.log('\nTechnicals — channel math')
   const barsFromCloses = (closes: number[]): Bar[] =>
     closes.map((c, i) => ({ t: i, o: c, h: c, l: c, c }))
 
-  // Shared 29-bar base (deterministic sinusoidal noise so sigma > 0), plus one
-  // free last close solved by bisection — against this module's own linreg —
-  // so it lands exactly on the upper rail, lower rail, or dead-center. The
-  // regression couples every point together, so the target close can't be
-  // derived by hand; it's the root of positionPct(x) = target for this base.
-  const channelBase = [
-    100, 102.43265306171307, 103.95634918996538, 102.58962809994662, 101.50496445046771,
-    99.94765031693115, 97.38527268275924, 97.552642162127, 99.10620008638304, 100.05044170145305,
-    102.47095979615636, 103.964504701631, 102.56379672426485, 101.45729508704805, 99.90056261224422,
-    97.360912720085, 97.56246681254605, 99.14558866328889, 100.10086914166341, 102.5087092865898,
-    103.97182206708462, 102.5372404934288, 101.40935507023711, 99.85378574844798, 97.33729889925549,
-    97.57312198359553, 99.18550153278115, 100.15126806342043, 102.5458908602044,
-  ]
+  // 32 closes = 100 + i + e[i], e repeating [+1,-1,-1,+1] every 4 indices.
+  // For ANY block of 4 consecutive indices, this pattern satisfies
+  // sum(e) = 0 and sum(i*e) = 0 (b+2c+3d = -1-2+3 = 0 for (a,b,c,d) =
+  // (1,-1,-1,1), independent of the block's starting index) — i.e. it's
+  // exactly orthogonal to the regression's own basis (the constant term and
+  // the x term), so it contributes NOTHING to the OLS fit. The fit is
+  // therefore *exactly* slope 1, intercept 100 (reproducing the underlying
+  // "100 + i" line), and every residual is exactly e[i] = ±1, so sigma is
+  // exactly 1 (population: sqrt(32 * 1^2 / 32)). No search, no floating
+  // slop — every expected value below is closed-form arithmetic.
+  //   mid[31]  = 100 + 31            = 131
+  //   upper[31] = 131 + 2*1          = 133
+  //   lower[31] = 131 - 2*1          = 129
+  //   lastClose = 100 + 31 + e[31]   = 131 + 1 = 132   (31 % 4 === 3 → +1)
+  //   positionPct = (132 - 129) / (133 - 129) * 100 = 75
+  // (A sample-variance (÷n-1) implementation would give sigma ≈ 1.0159 and
+  // positionPct ≈ 74.606, not 75 — this fixture discriminates the divisor.)
+  const unitPattern = [1, -1, -1, 1]
+  const knownChannelCloses = Array.from({ length: 32 }, (_, i) => 100 + i + unitPattern[i % 4])
+  const knownChannel = buildChannel(barsFromCloses(knownChannelCloses))
+  approx(knownChannel?.slopePerDay ?? null, 1, 1e-9, 'channel slope on 100+i+e[i] fixture → exactly 1')
+  approx(knownChannel?.upper[31] ?? null, 133, 1e-9, 'channel upper[n-1] → 131 + 2*sigma(1) = 133')
+  approx(knownChannel?.lower[31] ?? null, 129, 1e-9, 'channel lower[n-1] → 131 - 2*sigma(1) = 129')
+  approx(knownChannel?.positionPct ?? null, 75, 1e-6, 'channel positionPct on known fixture → exactly 75')
 
-  const upperRailTech = analyze(barsFromCloses([...channelBase, 105.09689917066314]))
-  approx(upperRailTech.positionPct, 100, 1e-4, 'positionPct at upper rail → 100')
+  // Same 32-point, 8-block construction, but now scale only the LAST block
+  // by s (still orthogonal to the fit for any s, by linearity of the
+  // sum(e)=0 / sum(i*e)=0 identities above) so the last residual is exactly
+  // s. With m=8 blocks and target residual = k*sigma, solving
+  // sigma^2 = [(m-1) + s^2] / m against s = k*sigma gives the closed form
+  // sigma^2 = (m-1)/(m-k^2). For k=+-2 (the rails): sigma^2 = 7/4, s = +-sqrt(7).
+  // For k=0 (mid): s = 0 trivially (last block untouched, residual 0).
+  const railCloses = (s: number): number[] =>
+    Array.from({ length: 32 }, (_, i) => {
+      const scale = Math.floor(i / 4) === 7 ? s : 1 // only the last block (idx 28-31) is scaled
+      return 100 + i + scale * unitPattern[i % 4]
+    })
 
-  const lowerRailTech = analyze(barsFromCloses([...channelBase, 94.85615351380913]))
-  approx(lowerRailTech.positionPct, 0, 1e-4, 'positionPct at lower rail → 0')
+  const upperRailTech = analyze(barsFromCloses(railCloses(Math.sqrt(7))))
+  approx(upperRailTech.positionPct, 100, 1e-6, 'positionPct at upper rail (derived, not bisected) → 100')
 
-  const midRailTech = analyze(barsFromCloses([...channelBase, 99.97652634223617]))
-  approx(midRailTech.positionPct, 50, 1e-4, 'positionPct at channel mid → 50')
+  const lowerRailTech = analyze(barsFromCloses(railCloses(-Math.sqrt(7))))
+  approx(lowerRailTech.positionPct, 0, 1e-6, 'positionPct at lower rail (derived, not bisected) → 0')
+
+  const midRailTech = analyze(barsFromCloses(railCloses(0)))
+  approx(midRailTech.positionPct, 50, 1e-6, 'positionPct at channel mid (derived, not bisected) → 50')
 
   // Flat series: sigma = 0 collapses upper/lower onto mid — the ratio is
   // undefined, defined as dead-center (50) rather than NaN/Infinity.
@@ -225,6 +250,35 @@ async function main() {
   // under MIN_SWING_PCT — falls back to the window high/low instead.
   const fibFallback = computeFib(fibBars)
   eq(fibFallback?.anchor ?? 'MISSING', 'window', 'computeFib: sub-threshold swing falls back to anchor "window"')
+
+  // Mis-ordered pivot pair: a confirmed pivot HIGH at index 40 (price ~100)
+  // followed by a confirmed pivot LOW at index 60 (price ~120) — a trending
+  // series where the more recent local trough still sits above the older
+  // local peak. The two pivots are independent local extrema with no
+  // ordering guarantee between them; asserting the pair is rejected (falls
+  // back to the window anchor) rather than emitted as high(100) < low(120).
+  const trendPivotBars: Bar[] = []
+  for (let i = 0; i < 70; i++) {
+    let h: number, l: number
+    if (i < 30) { h = 50; l = 49 } // filler, far below both zones — never a pivot (flat, ties)
+    else if (i < 50) { h = i === 40 ? 100 : 95; l = 94 } // pivot HIGH at 40
+    else { h = 126; l = i === 60 ? 120 : 125 } // pivot LOW at 60, priced ABOVE the idx-40 high
+    trendPivotBars.push({ t: i, o: h, h, l, c: l })
+  }
+  const trendPivots = findPivots(trendPivotBars, PIVOT_K)
+  eq(JSON.stringify(trendPivots.highs), JSON.stringify([40]), 'mis-ordered fixture: pivot high only at index 40')
+  eq(JSON.stringify(trendPivots.lows), JSON.stringify([60]), 'mis-ordered fixture: pivot low only at index 60')
+  const trendFib = computeFib(trendPivotBars)
+  eq(
+    trendFib?.anchor ?? 'MISSING',
+    'window',
+    'computeFib: mis-ordered pivot pair (low priced above high) falls back to window, not an inverted swing',
+  )
+  eq(
+    (trendFib?.high ?? -1) >= (trendFib?.low ?? -1),
+    true,
+    'computeFib: high >= low always holds (window fallback is max/min over the window, never inverted)',
+  )
 
   // ── Technicals: findGaps ─────────────────────────────────────────
   console.log('\nTechnicals — findGaps')

@@ -138,7 +138,10 @@ export function linreg(ys: number[]): LinregResult {
 }
 
 // ─── Regression channel ──────────────────────────────────────────────
-function buildChannel(visible: Bar[]): Channel | null {
+/** Exported (not just used internally by `analyze`) so its formula — the
+ *  channel every verdict depends on — is directly testable without going
+ *  through the full pipeline. */
+export function buildChannel(visible: Bar[]): Channel | null {
   const n = visible.length
   if (n < MIN_CHANNEL_BARS) return null
 
@@ -216,8 +219,14 @@ export function computeFib(visible: Bar[]): Fib | null {
   if (lastHighIdx != null && lastLowIdx != null) {
     const h = visible[lastHighIdx].h
     const l = visible[lastLowIdx].l
-    const swingPct = (Math.abs(h - l) / l) * 100
-    if (swingPct >= MIN_SWING_PCT) {
+    // Require h > l: the two pivots are independent local extrema, so nothing
+    // guarantees the "high" pivot's price actually exceeds the "low" pivot's
+    // price (a trending series can leave a later low pivot sitting above an
+    // older high pivot). Without this check a mis-ordered pair would return
+    // high < low — an inverted band. When it fails, this isn't a qualifying
+    // swing at all, so fall through to the window fallback below.
+    const swingPct = h > l ? ((h - l) / l) * 100 : 0
+    if (h > l && swingPct >= MIN_SWING_PCT) {
       picked = {
         high: h,
         low: l,
