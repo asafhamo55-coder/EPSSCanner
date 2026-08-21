@@ -2,6 +2,7 @@ import { unstable_cache } from 'next/cache'
 import { buildScorecard, type Scorecard } from './signals'
 import { db } from './db'
 import { YahooProvider } from '@/market-data'
+import { analyze, FETCH_BARS } from '@/lib/technicals'
 
 // ── live Yahoo fields, cached in the Next Data Cache ──────────────────────────
 //
@@ -42,9 +43,18 @@ const cachedAth = unstable_cache(
   { revalidate: ATH_TTL_S, tags: ['yahoo-live'] },
 )
 
+/** Live technical chart data (channel/fib/gaps/SMA series). Same bar fetch cost
+ *  as SMA, so it shares that TTL rather than getting its own. */
+const cachedTechnicals = unstable_cache(
+  (symbol: string) => new YahooProvider().getDailyBars(symbol, FETCH_BARS).then(analyze),
+  ['yahoo-technicals-v1'],
+  { revalidate: SMA_TTL_S, tags: ['yahoo-live'] },
+)
+
 const livePeg = (symbol: string) => cachedPeg(symbol).catch(() => null)
 const liveSma150 = (symbol: string) => cachedSma150(symbol).catch(() => null)
 const liveAth = (symbol: string) => cachedAth(symbol).catch(() => null)
+export const liveTechnicals = (symbol: string) => cachedTechnicals(symbol).catch(() => null)
 
 // Read helpers for the dashboard + ticker detail. Reads raw screener_* tables
 // and runs the SAME signals engine the ingest path / tests use, so every

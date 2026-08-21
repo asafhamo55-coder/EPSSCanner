@@ -4,6 +4,8 @@ import { revalidatePath, revalidateTag } from 'next/cache'
 import { db } from '@/lib/db'
 import { ingestAllActive, ingestTicker } from '@/lib/ingest'
 import { getProvider } from '@/market-data'
+import { liveTechnicals } from '@/lib/queries'
+import type { Technicals } from '@/lib/technicals'
 
 export interface ActionResult {
   ok: boolean
@@ -129,4 +131,10 @@ export async function removeTickerAction(symbol: string): Promise<ActionResult> 
   } catch (e) {
     return { ok: false, error: (e as Error).message }
   }
+}
+
+/** Chart data for the technical analysis modal. Fetched on demand — the modal
+ *  calls this itself rather than the page preloading it for every watchlist row. */
+export async function getTechnicals(symbol: string): Promise<Technicals | null> {
+  return liveTechnicals(symbol)
 }
