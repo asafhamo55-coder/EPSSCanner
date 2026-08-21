@@ -128,6 +128,14 @@ function cagrVal(r: WatchlistRow): number {
   return r.epsCagr5yr ?? -Infinity
 }
 
+// Market cap colour bands: < $500B red, $500B-$750B amber, > $750B green.
+function marketCapColor(mc: number | null): string {
+  if (mc == null) return 'text-muted'
+  if (mc < 500e9) return 'text-red-600'
+  if (mc <= 750e9) return 'text-amber-600'
+  return 'text-emerald-600'
+}
+
 // Default ordering: YoY EPS(3) ↓ dominates; NTM EPS Growth ↓ then EPS CAGR
 // 5yr ↓ only break exact ties (N/A sinks to the bottom).
 function compositeCompare(a: WatchlistRow, b: WatchlistRow): number {
@@ -559,7 +567,9 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
                     </span>
                   </td>
                   <td className="border-l border-border">
-                    <span className="tabular-nums text-foreground">{bigUsd(r.marketCap)}</span>
+                    <span className={'font-semibold tabular-nums ' + marketCapColor(r.marketCap)}>
+                      {bigUsd(r.marketCap)}
+                    </span>
                   </td>
                   <td>
                     <span className="tabular-nums text-muted">
@@ -640,7 +650,9 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
                         })}`
                       : 'N/A'}
                   </div>
-                  <div className="text-[11px] tabular-nums text-muted">{bigUsd(r.marketCap)}</div>
+                  <div className={'text-[11px] font-semibold tabular-nums ' + marketCapColor(r.marketCap)}>
+                    {bigUsd(r.marketCap)}
+                  </div>
                 </div>
                 <label
                   className="shrink-0 cursor-pointer p-1"
