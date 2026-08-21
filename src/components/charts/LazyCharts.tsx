@@ -23,3 +23,8 @@ export const QoqDeltaChart = dynamic(
   () => import('./QoqDeltaChart').then((m) => m.QoqDeltaChart),
   { ssr: false, loading: () => <Skeleton className="h-64 w-full" /> },
 )
+
+export const TechnicalChart = dynamic(
+  () => import('./TechnicalChart').then((m) => m.TechnicalChart),
+  { ssr: false, loading: () => <Skeleton className="h-[400px] w-full" /> },
+)

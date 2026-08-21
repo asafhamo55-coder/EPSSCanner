@@ -2,12 +2,13 @@
 
 import { type MouseEvent, type ReactNode, useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { ArrowDown, ArrowUp, Search, X } from 'lucide-react'
-import { Badge, Card } from '@/ui'
+import { ArrowDown, ArrowUp, LineChart, Search, X } from 'lucide-react'
+import { Badge, Button, Card } from '@/ui'
 import { bigUsd, usd } from '@/lib/format'
 import type { SignalState } from '@/lib/signals'
 import { SignalChip } from './SignalChip'
 import { RemoveTickerButton } from './RemoveTickerButton'
+import { TechnicalChartModal } from './TechnicalChartModal'
 
 export interface WatchlistRow {
   symbol: string
@@ -278,6 +279,11 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
     })
   }
 
+  // Which row's technical chart is open. One modal for the whole table (both
+  // layouts) rather than one per row — the modal pulls a live quote history and
+  // a ~1.1MB chart chunk, so it must not exist until a row asks for it.
+  const [chartSymbol, setChartSymbol] = useState<string | null>(null)
+
   // Hover help tooltip (Hebrew). Shown only while the pointer is over a column
   // title; positioned with viewport coords so it isn't clipped by the sticky,
   // overflow-auto table container.
@@ -380,6 +386,23 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
     )
   }
 
+  // Opens the technical chart. Shared by both layouts; each call site wraps it
+  // in its own stopPropagation guard so the row's navigate-to-ticker handler
+  // doesn't also fire.
+  const chartButton = (symbol: string) => (
+    <Button
+      variant="ghost"
+      size="sm"
+      // px-2 rather than the size's px-3: the phone card's header row already
+      // packs logo, name, price, checkbox and remove into ~360px.
+      className="px-2"
+      onClick={() => setChartSymbol(symbol)}
+      aria-label={`Open technical chart for ${symbol}`}
+    >
+      <LineChart className="h-4 w-4" />
+    </Button>
+  )
+
   // Trailing checkbox cell — ticking it moves the row into "Filtered Stocks",
   // unticking returns it to the main watchlist. stopPropagation so the click
   // doesn't also fire the row's navigate-to-ticker handler.
@@ -430,6 +453,7 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
               </th>
               <th />
               <th />
+              <th />
             </tr>
             <tr className="text-left [&>th]:sticky [&>th]:top-8 [&>th]:z-10 [&>th]:border-b [&>th]:border-border [&>th]:bg-surface [&>th]:px-4 [&>th]:py-3">
               {sortHeader('Ticker', 'symbol')}
@@ -446,13 +470,14 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
               {sortHeader('All Time High', 'allTimeHigh')}
               {sortHeader('% ATH', 'pctFromAth')}
               <th />
+              <th />
               <th className="border-l border-border text-center font-medium text-muted">Filter</th>
             </tr>
           </thead>
           <tbody>
             {sectionRows.length === 0 ? (
               <tr>
-                <td colSpan={15} className="px-4 py-10 text-center text-sm text-muted">
+                <td colSpan={16} className="px-4 py-10 text-center text-sm text-muted">
                   No tickers match these filters.
                 </td>
               </tr>
@@ -597,6 +622,7 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
                       </span>
                     )}
                   </td>
+                  <td onClick={(e) => e.stopPropagation()}>{chartButton(r.symbol)}</td>
                   <td onClick={(e) => e.stopPropagation()}>
                     <RemoveTickerButton symbol={r.symbol} />
                   </td>
@@ -670,6 +696,9 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
                     className="h-4 w-4 cursor-pointer accent-primary align-middle"
                   />
                 </label>
+                <div className="shrink-0" onClick={(e) => e.stopPropagation()}>
+                  {chartButton(r.symbol)}
+                </div>
                 <div className="-mr-1 shrink-0" onClick={(e) => e.stopPropagation()}>
                   <RemoveTickerButton symbol={r.symbol} />
                 </div>
@@ -854,6 +883,18 @@ export function WatchlistTable({ rows }: { rows: WatchlistRow[] }) {
         {desktopSection(watchlistStocks)}
         {mobileSection(watchlistStocks)}
       </section>
+
+      {/* Mounted only once a row asks for it, so opening is what triggers both
+          the provider fetch and the echarts chunk download. */}
+      {chartSymbol ? (
+        <TechnicalChartModal
+          symbol={chartSymbol}
+          open
+          onOpenChange={(o) => {
+            if (!o) setChartSymbol(null)
+          }}
+        />
+      ) : null}
 
       {/* Hebrew help tooltip — fixed to the viewport so it never gets clipped. */}
       {tip ? (
