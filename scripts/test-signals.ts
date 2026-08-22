@@ -33,8 +33,10 @@ import {
   linreg,
   MIN_CHANNEL_BARS,
   PIVOT_K,
+  scoreSignals,
   smaSeries,
-  verdictFor,
+  verdictFrom,
+  inGoldenZone,
 } from '../src/lib/technicals'
 import type { Bar } from '../src/market-data/provider'
 
@@ -154,12 +156,52 @@ async function main() {
   const linregNoisy = linreg([0, 1, 1])
   approx(linregNoisy.sigma, 0.2357022604, 1e-9, 'linreg sigma is population (÷n), not sample (÷n-1)')
 
-  // ── Technicals: verdictFor boundaries ───────────────────────────
-  console.log('\nTechnicals — verdictFor boundaries')
-  eq(verdictFor(70), 'dont-buy', 'positionPct 70 → dont-buy (boundary, inclusive)')
-  eq(verdictFor(69.99), 'fair', 'positionPct 69.99 → fair (just under boundary)')
-  eq(verdictFor(30), 'opportunity', 'positionPct 30 → opportunity (boundary, inclusive)')
-  eq(verdictFor(30.01), 'fair', 'positionPct 30.01 → fair (just over boundary)')
+  // ── Technicals: 3-factor scoring ─────────────────────────────────
+  // Fib fixtures below are a rally anchored high=200 low=100 (span 100), so the
+  // golden zone runs from 200-100*0.618 = 138.2 up to 200-100*0.5 = 150.
+  console.log('\nTechnicals — signal scoring')
+  const gzRallyFib = {
+    high: 200,
+    low: 100,
+    direction: 'rally' as const,
+    anchor: 'swing' as const,
+    levels: [],
+  }
+  eq(inGoldenZone(150, gzRallyFib), true, 'golden zone: close on the 50% level (150) is inside')
+  eq(inGoldenZone(138.2, gzRallyFib), true, 'golden zone: close on the 61.8% level (138.2) is inside')
+  eq(inGoldenZone(144, gzRallyFib), true, 'golden zone: close mid-band (144) is inside')
+  eq(inGoldenZone(150.01, gzRallyFib), false, 'golden zone: just above the 50% level is outside')
+  eq(inGoldenZone(138.19, gzRallyFib), false, 'golden zone: just below the 61.8% level is outside')
+  eq(inGoldenZone(144, null), false, 'golden zone: no fib anchor scores false, never throws')
+
+  // Same band on a decline: levels measure UP from the low, so 100+100*0.5=150
+  // and 100+100*0.618=161.8 — the min/max comparison must handle both orders.
+  const gzDeclineFib = { ...gzRallyFib, direction: 'decline' as const }
+  eq(inGoldenZone(155, gzDeclineFib), true, 'golden zone (decline): 155 is inside 150..161.8')
+  eq(inGoldenZone(144, gzDeclineFib), false, 'golden zone (decline): 144 is outside')
+
+  eq(scoreSignals(20, 144, gzRallyFib, 100).score, 3, 'score: all three factors fire → 3')
+  eq(scoreSignals(50, 144, gzRallyFib, 100).score, 2, 'score: tunnel misses → 2')
+  eq(scoreSignals(50, 160, gzRallyFib, 100).score, 1, 'score: only SMA fires → 1')
+  eq(scoreSignals(50, 160, gzRallyFib, 200).score, 0, 'score: nothing fires → 0')
+  eq(scoreSignals(30, 160, gzRallyFib, 200).tunnelOk, true, 'tunnelOk at exactly 30 (inclusive)')
+  eq(scoreSignals(30.01, 160, gzRallyFib, 200).tunnelOk, false, 'tunnelOk just above 30 is false')
+  eq(scoreSignals(50, 160, gzRallyFib, null).smaOk, false, 'smaOk: null SMA scores false, never throws')
+  eq(scoreSignals(50, 100, gzRallyFib, 100).smaOk, false, 'smaOk: close equal to SMA is not above')
+
+  console.log('\nTechnicals — verdict from score')
+  const s3 = { tunnelOk: true, goldenOk: true, smaOk: true, score: 3 }
+  const s2 = { tunnelOk: true, goldenOk: true, smaOk: false, score: 2 }
+  const s1 = { tunnelOk: false, goldenOk: false, smaOk: true, score: 1 }
+  const s0 = { tunnelOk: false, goldenOk: false, smaOk: false, score: 0 }
+  eq(verdictFrom(s3, 20), 'strong-buy', 'score 3 → strong-buy')
+  eq(verdictFrom(s2, 20), 'opportunity', 'score 2 → opportunity')
+  eq(verdictFrom(s1, 50), 'fair', 'score 1 → fair')
+  eq(verdictFrom(s0, 50), 'dont-buy', 'score 0 → dont-buy')
+  // The veto: a high score cannot rescue price pinned at the top of the channel.
+  eq(verdictFrom(s3, 70), 'dont-buy', 'veto: positionPct 70 overrides a 3/3 score')
+  eq(verdictFrom(s2, 84), 'dont-buy', 'veto: positionPct 84 overrides a 2/3 score')
+  eq(verdictFrom(s3, 69.99), 'strong-buy', 'veto: just under 70 does not override')
 
   // ── Technicals: channel math (hand-derived, not bisected) ────────
   console.log('\nTechnicals — channel math')

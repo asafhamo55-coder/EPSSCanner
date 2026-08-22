@@ -2,38 +2,83 @@
 
 import { useMemo } from 'react'
 import ReactECharts from 'echarts-for-react'
+import { Check, CircleHelp, Minus, TrendingUp, X } from 'lucide-react'
 import { tokens } from '@/ui'
 import { usd } from '@/lib/format'
-import { VISIBLE_BARS, type Technicals, type Verdict } from '@/lib/technicals'
+import {
+  DONT_BUY_PCT,
+  GOLDEN_ZONE_HIGH,
+  GOLDEN_ZONE_LOW,
+  OPPORTUNITY_PCT,
+  VISIBLE_BARS,
+  type SignalScore,
+  type Technicals,
+  type Verdict,
+} from '@/lib/technicals'
 
 // Daily candlestick with the regression tunnel, the 150-day SMA, Fibonacci
 // retracement levels and any still-open gaps, under a verdict banner.
 //
-// The verdict comes from the tunnel position ALONE. Gaps, SMA and Fib are
-// context a trader reads next to it — they are never scored, so they render
-// visually subordinate to the banner and never inside it.
+// The verdict is scored from THREE factors — tunnel position, the golden-zone
+// retracement and price vs the 150-day SMA — with one override: price at or
+// above DONT_BUY_PCT of tunnel height stays 'dont-buy' whatever else fires.
+// Open gaps are deliberately NOT scored and stay in the plain context line.
+//
+// Every grade ships as colour + icon + word + score. The two best grades are
+// only ~9 ΔE apart as hues (a validated fail), so STRONG BUY and OPPORTUNITY
+// are separated by FILL WEIGHT — solid vs tint — never by shade alone.
 
 const VERDICT_COPY: Record<Verdict, string> = {
-  'dont-buy': "DON'T BUY",
+  'strong-buy': 'STRONG BUY',
   opportunity: 'OPPORTUNITY',
   fair: 'FAIR',
+  'dont-buy': "DON'T BUY",
   'insufficient-history': 'NOT ENOUGH HISTORY',
 }
 
-// Banner chrome mirrors the Alert palette so the three tones read the same as
-// every other status surface in the app.
+const VERDICT_ICON: Record<Verdict, typeof Check> = {
+  'strong-buy': TrendingUp,
+  opportunity: Check,
+  fair: Minus,
+  'dont-buy': X,
+  'insufficient-history': CircleHelp,
+}
+
+// Banner chrome mirrors the Alert palette so these tones read the same as every
+// other status surface in the app. 'strong-buy' is the one solid fill — that
+// weight, not a darker green, is what distinguishes it from 'opportunity'.
 const VERDICT_BANNER: Record<Verdict, string> = {
-  'dont-buy': 'border-red-200 bg-red-50 text-red-900',
+  'strong-buy': 'border-emerald-600 bg-emerald-600 text-white',
   opportunity: 'border-emerald-200 bg-emerald-50 text-emerald-900',
-  fair: 'border-border bg-background text-foreground',
+  fair: 'border-amber-200 bg-amber-50 text-amber-900',
+  'dont-buy': 'border-red-200 bg-red-50 text-red-900',
   'insufficient-history': 'border-border bg-background text-foreground',
 }
 
-const VERDICT_METER: Record<Verdict, string> = {
-  'dont-buy': 'bg-red-600',
-  opportunity: 'bg-emerald-600',
-  fair: 'bg-foreground/50',
-  'insufficient-history': 'bg-foreground/50',
+/** Meter tone follows the TUNNEL POSITION, not the grade — the bar measures
+ *  position, so painting it by a 3-factor grade would show a green bar for a
+ *  stretched price whenever the other two factors carried the score. */
+function meterTone(positionPct: number): { fill: string; track: string } {
+  if (positionPct >= DONT_BUY_PCT) return { fill: 'bg-red-600', track: 'bg-red-100' }
+  if (positionPct <= OPPORTUNITY_PCT) return { fill: 'bg-emerald-600', track: 'bg-emerald-100' }
+  return { fill: 'bg-amber-500', track: 'bg-amber-100' }
+}
+
+/** One scored factor: pass/fail glyph, what it tests, and the reading that
+ *  decided it. The glyph carries the state so colour never has to. */
+function FactorRow({ ok, label, value }: { ok: boolean; label: string; value: string }) {
+  return (
+    <li className="flex items-center gap-2">
+      {ok ? (
+        <Check className="h-3.5 w-3.5 shrink-0" aria-hidden />
+      ) : (
+        <X className="h-3.5 w-3.5 shrink-0 opacity-45" aria-hidden />
+      )}
+      <span className={ok ? 'font-medium' : 'opacity-60'}>{label}</span>
+      <span className="ml-auto tabular-nums opacity-75">{value}</span>
+      <span className="sr-only">{ok ? ' — met' : ' — not met'}</span>
+    </li>
+  )
 }
 
 /** Unix SECONDS → the short axis label ('Mar 14'). */
@@ -42,7 +87,10 @@ function dayLabel(t: number): string {
 }
 
 function ratioLabel(ratio: number): string {
-  return `${(ratio * 100).toFixed(1)}%`
+  // 0.5 → '50%', 0.618 → '61.8%'. A trailing '.0' reads as false precision on
+  // the round levels, which now sit in the scored golden-zone label.
+  const pct = ratio * 100
+  return `${Number.isInteger(pct) ? pct : pct.toFixed(1)}%`
 }
 
 function signedPct(v: number): string {
@@ -50,7 +98,8 @@ function signedPct(v: number): string {
 }
 
 export function TechnicalChart({ data, symbol }: { data: Technicals; symbol: string }) {
-  const { visible, sma150, channel, fib, gaps, verdict, positionPct, windowBars } = data
+  const { visible, sma150, channel, fib, gaps, verdict, positionPct, signals, windowBars } =
+    data
 
   const option = useMemo(() => {
     const labels = visible.map((b) => dayLabel(b.t))
@@ -239,44 +288,121 @@ export function TechnicalChart({ data, symbol }: { data: Technicals; symbol: str
   // history reads as short, not as full confidence.
   const isShortWindow = windowBars < VISIBLE_BARS
 
+  const Icon = VERDICT_ICON[verdict]
+  const solid = verdict === 'strong-buy'
+  const tone = positionPct != null ? meterTone(positionPct) : null
+
   return (
     <div className="space-y-3">
       <div className={`rounded-xl border px-4 py-3 ${VERDICT_BANNER[verdict]}`}>
-        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
-          <span className="text-lg font-bold tracking-wide">{VERDICT_COPY[verdict]}</span>
-          {showPct ? (
-            <span className="text-sm font-semibold tabular-nums">
-              {Math.round(positionPct)}% of tunnel height
-              {isShortWindow ? ` · ${windowBars} bars of history` : null}
+        {/* Grade line: icon + word + score. Colour is never the only channel —
+            a reader who cannot separate the two greens still has the glyph,
+            the word and the N/3 count. */}
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+          <span className="flex items-center gap-2">
+            <Icon className="h-5 w-5 shrink-0" aria-hidden />
+            <span className="text-xl font-bold tracking-wide">{VERDICT_COPY[verdict]}</span>
+          </span>
+          {signals ? (
+            <span className="flex items-center gap-2">
+              {/* Score pips: one segment per factor, 2px surface gaps. */}
+              <span className="flex gap-[2px]" aria-hidden>
+                {[0, 1, 2].map((i) => (
+                  <span
+                    key={i}
+                    className={`h-1.5 w-5 rounded-full ${
+                      i < signals.score
+                        ? solid
+                          ? 'bg-white'
+                          : 'bg-current opacity-80'
+                        : solid
+                          ? 'bg-white/30'
+                          : 'bg-current opacity-20'
+                    }`}
+                  />
+                ))}
+              </span>
+              <span className="text-sm font-semibold">{signals.score}/3 signals</span>
             </span>
           ) : null}
         </div>
-        {showPct && meterPct != null ? (
-          // The raw reading can sit outside 0..100 (price broke out of the
-          // tunnel); the number above stays raw, the bar is clamped so it
-          // cannot overflow its track.
-          <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-foreground/10">
-            <div
-              className={`h-full rounded-full ${VERDICT_METER[verdict]}`}
-              style={{ width: `${meterPct}%` }}
-            />
+
+        {showPct && meterPct != null && tone ? (
+          <div className="mt-3">
+            <div className="flex items-baseline justify-between text-xs font-medium">
+              {/* Proportional figures: this is a standalone value, not a column. */}
+              <span>
+                <span className="text-base font-semibold">{Math.round(positionPct)}%</span> of
+                tunnel height
+              </span>
+              {isShortWindow ? <span>{windowBars} bars of history</span> : null}
+            </div>
+            {/* The raw reading can sit outside 0..100 (price broke out of the
+                tunnel); the number above stays raw, the bar is clamped so it
+                cannot overflow its track. The unfilled track is a lighter step
+                of the fill's own ramp, so state reads across the whole bar. */}
+            <div className={`relative mt-1.5 h-2 w-full rounded-full ${tone.track}`}>
+              <div
+                className={`h-full rounded-full ${tone.fill}`}
+                style={{ width: `${meterPct}%` }}
+              />
+              {/* Threshold ticks: the two cut points the grade turns on. */}
+              {[OPPORTUNITY_PCT, DONT_BUY_PCT].map((t) => (
+                <span
+                  key={t}
+                  className="absolute top-0 h-full w-px bg-current opacity-40"
+                  style={{ left: `${t}%` }}
+                  aria-hidden
+                />
+              ))}
+            </div>
+            <div className="mt-1 flex justify-between text-[10px] opacity-70">
+              <span>cheap</span>
+              <span>{OPPORTUNITY_PCT}</span>
+              <span>{DONT_BUY_PCT}</span>
+              <span>stretched</span>
+            </div>
           </div>
+        ) : null}
+
+        {/* Factor rows: what actually produced the score, each with the reading
+            that decided it, so the grade is never an unexplained assertion. */}
+        {signals ? (
+          <ul className="mt-3 space-y-1 border-t border-current/15 pt-2 text-xs">
+            <FactorRow
+              ok={signals.tunnelOk}
+              label={`Tunnel position ≤ ${OPPORTUNITY_PCT}%`}
+              value={positionPct != null ? `${Math.round(positionPct)}%` : '—'}
+            />
+            <FactorRow
+              ok={signals.goldenOk}
+              label={`Golden zone (${ratioLabel(GOLDEN_ZONE_LOW)}–${ratioLabel(GOLDEN_ZONE_HIGH)})`}
+              value={
+                fib
+                  ? fib.anchor === 'window'
+                    ? 'window extremes'
+                    : 'from detected swing'
+                  : 'no anchor'
+              }
+            />
+            <FactorRow
+              ok={signals.smaOk}
+              label="Above SMA 150"
+              value={vsSma != null ? signedPct(vsSma) : 'unavailable'}
+            />
+          </ul>
         ) : null}
       </div>
 
       <p className="text-xs leading-relaxed text-muted">
         <span className="font-medium uppercase tracking-wide">Context (not scored)</span>
         {' · '}
-        {vsSma != null ? `${signedPct(vsSma)} vs SMA 150` : 'SMA 150 unavailable'}
-        {' · '}
         {gaps.length === 0
           ? 'no open gaps'
           : `${gaps.length} open gap${gaps.length === 1 ? '' : 's'} (${gapsAbove} above, ${gapsBelow} below)`}
         {' · '}
         {nearestFib && fib
-          ? `nearest fib ${ratioLabel(nearestFib.ratio)} · ${usd(nearestFib.price)} — ${
-              fib.anchor === 'window' ? 'window extremes (no major swing)' : 'from the detected swing'
-            }`
+          ? `nearest fib ${ratioLabel(nearestFib.ratio)} · ${usd(nearestFib.price)}`
           : 'no fib retracement'}
       </p>
 

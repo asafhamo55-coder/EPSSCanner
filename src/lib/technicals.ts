@@ -34,8 +34,30 @@ export const FIB_LEVELS = [0.236, 0.382, 0.5, 0.618, 0.786] as const
 export const GAP_MIN_PCT = 2
 /** Below this many visible bars the regression channel is too short to trust. */
 export const MIN_CHANNEL_BARS = 30
+/** The "golden zone" retracement band. A pullback that holds between these two
+ *  levels is the classic buy-the-dip entry, so landing inside it scores. */
+export const GOLDEN_ZONE_LOW = 0.5
+export const GOLDEN_ZONE_HIGH = 0.618
 
-export type Verdict = 'dont-buy' | 'fair' | 'opportunity' | 'insufficient-history'
+export type Verdict =
+  | 'dont-buy'
+  | 'fair'
+  | 'opportunity'
+  | 'strong-buy'
+  | 'insufficient-history'
+
+/** The three factors behind a verdict. Gaps are deliberately absent: they stay
+ *  context and are never scored. */
+export interface SignalScore {
+  /** Price sits in the cheap end of the channel (positionPct <= OPPORTUNITY_PCT). */
+  tunnelOk: boolean
+  /** Last close is inside the golden-zone retracement band. */
+  goldenOk: boolean
+  /** Last close is above the 150-day SMA — the trend is intact. */
+  smaOk: boolean
+  /** How many of the three fired, 0..3. */
+  score: number
+}
 
 export interface Channel {
   upper: number[] // per visible bar
@@ -76,6 +98,9 @@ export interface Technicals {
   gaps: Gap[]
   verdict: Verdict
   positionPct: number | null
+  /** The factor breakdown behind `verdict`, so the UI can show WHY rather than
+   *  just the grade. Null when there is no channel to score against. */
+  signals: SignalScore | null
   /** `visible.length`, surfaced explicitly so the UI never has to infer a
    *  short-history window from array length — a channel built on fewer than
    *  VISIBLE_BARS bars is still a full-confidence-looking verdict otherwise. */
@@ -312,10 +337,52 @@ export function findGaps(visible: Bar[]): Gap[] {
 }
 
 // ─── Verdict ─────────────────────────────────────────────────────────
-export function verdictFor(positionPct: number): Verdict {
+/** Is `close` inside the golden-zone retracement band?
+ *
+ *  The two level prices are derived from the ratios rather than assumed to be
+ *  in any order: on a rally the higher ratio is the LOWER price (levels are
+ *  measured down from the swing high) and on a decline it is inverted. Taking
+ *  min/max keeps one comparison correct for both directions. */
+export function inGoldenZone(close: number, fib: Fib | null): boolean {
+  if (!fib) return false
+  const span = fib.high - fib.low
+  const at = (ratio: number) =>
+    fib.direction === 'rally' ? fib.high - span * ratio : fib.low + span * ratio
+  const a = at(GOLDEN_ZONE_LOW)
+  const b = at(GOLDEN_ZONE_HIGH)
+  return close >= Math.min(a, b) && close <= Math.max(a, b)
+}
+
+/** Score the three buy factors. Any missing input (no Fib anchor, SMA still in
+ *  warmup) scores its factor false rather than throwing — an absent signal is
+ *  not a positive one. */
+export function scoreSignals(
+  positionPct: number,
+  close: number,
+  fib: Fib | null,
+  smaLast: number | null,
+): SignalScore {
+  const tunnelOk = positionPct <= OPPORTUNITY_PCT
+  const goldenOk = inGoldenZone(close, fib)
+  const smaOk = smaLast != null && close > smaLast
+  return {
+    tunnelOk,
+    goldenOk,
+    smaOk,
+    score: Number(tunnelOk) + Number(goldenOk) + Number(smaOk),
+  }
+}
+
+/** Grade from the factor count, with one override: price stretched to the top
+ *  of its channel stays 'dont-buy' however many other factors fire. A name at
+ *  +2 sigma that is also above its SMA is a momentum extension, not a bargain,
+ *  and scoring it as one is the failure mode this veto exists to prevent. */
+export function verdictFrom(signals: SignalScore, positionPct: number): Verdict {
   if (positionPct >= DONT_BUY_PCT) return 'dont-buy'
-  if (positionPct <= OPPORTUNITY_PCT) return 'opportunity'
-  return 'fair'
+  if (signals.score >= 3) return 'strong-buy'
+  if (signals.score === 2) return 'opportunity'
+  if (signals.score === 1) return 'fair'
+  return 'dont-buy'
 }
 
 // ─── Entry point ─────────────────────────────────────────────────────
@@ -328,7 +395,25 @@ export function analyze(bars: Bar[]): Technicals {
   const gaps = findGaps(visible)
 
   const positionPct = channel ? channel.positionPct : null
-  const verdict: Verdict = channel ? verdictFor(channel.positionPct) : 'insufficient-history'
+  const lastClose = visible.length > 0 ? visible[visible.length - 1].c : null
+  const smaLast = sma150.length > 0 ? sma150[sma150.length - 1] : null
 
-  return { visible, sma150, channel, fib, gaps, verdict, positionPct, windowBars: visible.length }
+  const signals =
+    channel && lastClose != null
+      ? scoreSignals(channel.positionPct, lastClose, fib, smaLast)
+      : null
+  const verdict: Verdict =
+    channel && signals ? verdictFrom(signals, channel.positionPct) : 'insufficient-history'
+
+  return {
+    visible,
+    sma150,
+    channel,
+    fib,
+    gaps,
+    verdict,
+    positionPct,
+    signals,
+    windowBars: visible.length,
+  }
 }
