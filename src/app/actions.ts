@@ -133,6 +133,12 @@ export async function removeTickerAction(symbol: string): Promise<ActionResult> 
   }
 }
 
+/** Upper bound on the chart action. Must stay comfortably under the route's
+ *  serverless limit (10s on Hobby) so WE decide the failure, not the platform:
+ *  a timeout we control returns null and renders an error, a platform kill
+ *  returns nothing at all and hangs the modal. */
+const TECHNICALS_TIMEOUT_MS = 8_000
+
 /** Chart data for the technical analysis modal. Fetched on demand — the modal
  *  calls this itself rather than the page preloading it for every watchlist row.
  *  Public POST endpoint with no auth in front of it, so the symbol must be
@@ -143,5 +149,24 @@ export async function removeTickerAction(symbol: string): Promise<ActionResult> 
 export async function getTechnicals(symbol: string): Promise<Technicals | null> {
   const sym = symbol.trim().toUpperCase()
   if (!/^[A-Z][A-Z0-9.\-]{0,9}$/.test(sym)) return null
-  return liveTechnicals(sym)
+
+  // Resolve to null rather than run to the platform's function limit. Vercel
+  // killed this action mid-flight in production (POST → responseStatusCode 0):
+  // no response reaches the browser, the client promise never settles, and the
+  // modal sits on its skeleton forever. Losing the race is a visible error
+  // state; losing the function is an indefinite spinner.
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      liveTechnicals(sym),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => {
+          console.warn(`[technicals] ${sym} timed out after ${TECHNICALS_TIMEOUT_MS}ms`)
+          resolve(null)
+        }, TECHNICALS_TIMEOUT_MS)
+      }),
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
 }

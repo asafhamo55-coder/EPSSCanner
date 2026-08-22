@@ -51,6 +51,29 @@ const cachedTechnicals = unstable_cache(
   { revalidate: SMA_TTL_S, tags: ['yahoo-live'] },
 )
 
+/** Most live Yahoo calls allowed in flight at once across the whole watchlist.
+ *  Each ticker issues up to three (PEG, SMA, ATH), so ~100 tickers unbounded
+ *  meant ~300 simultaneous outbound requests from one serverless function. */
+const LIVE_FETCH_CONCURRENCY = 8
+
+/** `Promise.all(items.map(fn))` with a ceiling on how many run at once.
+ *  Results keep the input order — callers index into them positionally. */
+async function mapLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const out = new Array<R>(items.length)
+  let next = 0
+  const worker = async () => {
+    for (let i = next++; i < items.length; i = next++) {
+      out[i] = await fn(items[i])
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+  return out
+}
+
 const livePeg = (symbol: string) => cachedPeg(symbol).catch(() => null)
 const liveSma150 = (symbol: string) => cachedSma150(symbol).catch(() => null)
 const liveAth = (symbol: string) => cachedAth(symbol).catch(() => null)
@@ -58,8 +81,10 @@ export const liveTechnicals = (symbol: string) => cachedTechnicals(symbol).catch
 
 // Read helpers for the dashboard + ticker detail. Reads raw screener_* tables
 // and runs the SAME signals engine the ingest path / tests use, so every
-// surface agrees on the numbers. The watchlist is tiny, so the per-ticker
-// fan-out here is intentionally simple.
+// surface agrees on the numbers. The per-ticker fan-out is bounded: the
+// watchlist was a handful of tickers when this was written and is now ~100, so
+// an unbounded Promise.all issued roughly three live Yahoo calls per ticker at
+// once (~300 concurrent) on a cold cache.
 
 export interface EpsPoint {
   fiscalPeriod: string
@@ -222,8 +247,7 @@ export async function getWatchlist(): Promise<TickerData[]> {
     .order('symbol', { ascending: true })
 
   const rows = (data ?? []) as TickerRow[]
-  return Promise.all(
-    rows.map(async (row) => {
+  return mapLimit(rows, LIVE_FETCH_CONCURRENCY, async (row) => {
       const { eps, valuation, annual } = await loadFor(row.id)
       let val = valuation
       const [peg, sma150, allTimeHigh] = await Promise.all([
@@ -233,8 +257,7 @@ export async function getWatchlist(): Promise<TickerData[]> {
       ])
       val = { ...val, peg5yr: peg ?? val.peg5yr, sma150, allTimeHigh }
       return assemble(row, eps, val, annual)
-    }),
-  )
+  })
 }
 
 export async function getTicker(symbol: string): Promise<TickerData | null> {

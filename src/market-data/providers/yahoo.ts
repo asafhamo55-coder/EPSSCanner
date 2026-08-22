@@ -31,6 +31,36 @@ const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
   '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 
+/** A cold watchlist render makes hundreds of these calls, so logging every one
+ *  would bury the signal — only slow or failed calls are worth a line. Yahoo
+ *  degrading under our own fan-out is the thing this is here to catch, and it
+ *  shows up as rising latency before it shows up as errors. */
+const SLOW_CALL_MS = 2_000
+
+async function timedFetch(
+  url: URL,
+  init: RequestInit,
+  symbol: string,
+  label: string,
+): Promise<Response> {
+  const startedAt = Date.now()
+  try {
+    const res = await fetch(url, init)
+    const ms = Date.now() - startedAt
+    if (!res.ok || ms > SLOW_CALL_MS) {
+      console.warn(`[yahoo] ${label} ${symbol} → ${res.status} in ${ms}ms`)
+    }
+    return res
+  } catch (err) {
+    console.warn(
+      `[yahoo] ${label} ${symbol} → threw after ${Date.now() - startedAt}ms: ${
+        (err as Error).message
+      }`,
+    )
+    throw err
+  }
+}
+
 const MODULES = [
   'price',
   'summaryDetail',
@@ -149,9 +179,12 @@ export async function fetchSummary(symbol: string): Promise<QuoteSummary> {
   url.searchParams.set('modules', MODULES)
   url.searchParams.set('crumb', crumb)
 
-  const res = await fetch(url, {
-    headers: { 'User-Agent': UA, accept: 'application/json', ...(cookie ? { cookie } : {}) },
-  })
+  const res = await timedFetch(
+    url,
+    { headers: { 'User-Agent': UA, accept: 'application/json', ...(cookie ? { cookie } : {}) } },
+    symbol,
+    'quoteSummary',
+  )
   if (res.status === 401 || res.status === 403) {
     // Stale crumb — drop the cache so the next call re-handshakes.
     creds = null
@@ -184,9 +217,12 @@ export async function fetchChartYtd(
   url.searchParams.set('interval', '1d')
   url.searchParams.set('crumb', crumb)
 
-  const res = await fetch(url, {
-    headers: { 'User-Agent': UA, accept: 'application/json', ...(cookie ? { cookie } : {}) },
-  })
+  const res = await timedFetch(
+    url,
+    { headers: { 'User-Agent': UA, accept: 'application/json', ...(cookie ? { cookie } : {}) } },
+    symbol,
+    'chart-ytd',
+  )
   if (!res.ok) throw new ProviderError(`Yahoo chart → ${res.status}`, symbol, res.status)
 
   const json = (await res.json()) as {
@@ -327,9 +363,12 @@ export class YahooProvider implements DataProvider {
     const url = new URL(`${CHART_BASE}/${encodeURIComponent(symbol)}`)
     url.searchParams.set('range', '1y')
     url.searchParams.set('interval', '1d')
-    const res = await fetch(url, {
-      headers: { 'User-Agent': UA, accept: 'application/json' },
-    })
+    const res = await timedFetch(
+      url,
+      { headers: { 'User-Agent': UA, accept: 'application/json' } },
+      symbol,
+      'sma',
+    )
     if (!res.ok) throw new ProviderError(`Yahoo chart → ${res.status}`, symbol, res.status)
     const json = (await res.json()) as {
       chart?: { result?: { indicators?: { quote?: { close?: (number | null)[] }[] } }[] }
@@ -352,9 +391,12 @@ export class YahooProvider implements DataProvider {
     const url = new URL(`${CHART_BASE}/${encodeURIComponent(symbol)}`)
     url.searchParams.set('range', '2y')
     url.searchParams.set('interval', '1d')
-    const res = await fetch(url, {
-      headers: { 'User-Agent': UA, accept: 'application/json' },
-    })
+    const res = await timedFetch(
+      url,
+      { headers: { 'User-Agent': UA, accept: 'application/json' } },
+      symbol,
+      'daily-bars',
+    )
     if (!res.ok) throw new ProviderError(`Yahoo chart → ${res.status}`, symbol, res.status)
     const json = (await res.json()) as {
       chart?: {
@@ -404,9 +446,12 @@ export class YahooProvider implements DataProvider {
     const url = new URL(`${CHART_BASE}/${encodeURIComponent(symbol)}`)
     url.searchParams.set('range', 'max')
     url.searchParams.set('interval', '1mo')
-    const res = await fetch(url, {
-      headers: { 'User-Agent': UA, accept: 'application/json' },
-    })
+    const res = await timedFetch(
+      url,
+      { headers: { 'User-Agent': UA, accept: 'application/json' } },
+      symbol,
+      'ath',
+    )
     if (!res.ok) throw new ProviderError(`Yahoo chart → ${res.status}`, symbol, res.status)
     const json = (await res.json()) as {
       chart?: {
