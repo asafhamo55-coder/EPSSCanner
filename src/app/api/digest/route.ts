@@ -72,7 +72,13 @@ function authorized(req: NextRequest): boolean {
  *  'YYYY-MM-DD' string — the same shape `easternDate()` produces. Compare the
  *  strings directly. Do NOT round-trip through `new Date()`: that parses a
  *  date-only string as UTC midnight, which formats back as the PREVIOUS day in
- *  Eastern and would make today's fresh snapshot look stale every morning. */
+ *  Eastern and would make today's fresh snapshot look stale every morning.
+ *
+ *  Known subtlety, left as-is: `as_of` is written as a UTC calendar date, not
+ *  an Eastern one, so this string comparison against `today` (Eastern) is
+ *  only correct while the cron runs inside the 10:00–11:59 UTC window (as it
+ *  does today) — a schedule change that moved the run outside that window
+ *  could make a same-day snapshot compare unequal. */
 async function snapshotIsFresh(today: string): Promise<boolean> {
   const supabase = db()
   const { data } = await supabase
