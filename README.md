@@ -34,6 +34,8 @@ adding/persisting tickers requires a Supabase project (below).
 In the SQL editor of your project (`oyhcchumlizmhwvjjlrl`), run in order:
 1. `supabase/migrations/0026_screener.sql`
 2. `supabase/migrations/0027_screener_views.sql`
+3. `supabase/migrations/0029_subscribers.sql` — required for the TripleQ Daily
+   Maily (subscribers + the per-day send ledger; see below).
 
 No RLS/auth/storage setup needed.
 
@@ -47,14 +49,24 @@ No RLS/auth/storage setup needed.
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase → Settings → API → `service_role` (server-only) |
 | `MARKET_DATA_PROVIDER` | `fmp` for live data, or `mock` to demo |
 | `MARKET_DATA_FMP_API_KEY` | free key from financialmodelingprep.com (only for `fmp`) |
-| `CRON_SECRET` | *(optional)* random string; protects `/api/ingest` |
+| `CRON_SECRET` | *(optional)* random string; protects `/api/ingest` and `/api/digest` |
+| `RESEND_API_KEY` | Resend API key. Unset = the send layer no-ops and logs instead of mailing anyone |
+| `DIGEST_FROM` | Sender identity, e.g. `TripleQ Group <daily@tripleqgroup.com>`. Requires the domain verified in Resend |
+| `NEXT_PUBLIC_SITE_URL` | Absolute origin for links inside emails, e.g. `https://tripleqgroup.vercel.app`. No trailing slash |
+| `DIGEST_TEST_EMAIL` | Sole recipient of `GET /api/digest?force=1`, for verifying a real send |
 
 Deploy. The app is live.
 
-### 3. Weekly auto-refresh (built in)
-`vercel.json` registers a **Vercel Cron** that GETs `/api/ingest` every Monday
-11:00 UTC to re-pull fundamentals for the whole watchlist. If `CRON_SECRET` is
-set, Vercel automatically sends it as a Bearer token. Nothing else to wire.
+### 3. Daily auto-refresh and the 6 AM ET digest
+`vercel.json` registers two **Vercel Cron** jobs:
+- `/api/ingest` at 09:30 UTC every day — re-pulls fundamentals for the whole
+  watchlist.
+- `/api/digest` at 10:00 **and** 11:00 UTC every day — the TripleQ Daily Maily
+  (see below). Both fire daily; the route's own clock guard keeps the actual
+  send down to exactly one, at 6 AM America/New_York, year-round.
+
+If `CRON_SECRET` is set, Vercel automatically sends it as a Bearer token on
+both. Nothing else to wire.
 
 > **Note on live data:** FMP's free tier doesn't expose forward P/E, so **Step 5
 > shows N/A** on live data until you add a forward-EPS source or upgrade FMP.
@@ -100,3 +112,77 @@ supabase/migrations/          0026 (tables) + 0027 (views)
 | 5 | Forward growth | `trailing_pe / forward_pe` (= `eps_fwd / eps_ttm`) |
 
 Signals are shown for your own judgment — there is no buy/avoid verdict.
+
+## TripleQ Daily Maily
+
+A daily email digest of the watchlist, sent at exactly **6 AM America/New_York**
+to everyone confirmed on the list — the ranked, scored picks that would have
+been worth a second look before the open.
+
+### What it sends, and when
+`GET /api/digest` (the Vercel Cron target) scores the watchlist with the model
+below and emails whichever names clear both the gates and the score floor,
+ranked best first, capped at `MAX_PICKS` (10). If nothing clears the bar, the
+email says so plainly rather than padding the list — see `MIN_SCORE` (50)
+below.
+
+**Entry gates** — binary; a name must pass every one or it is not in the
+running, however well it scores elsewhere (`src/lib/score.ts`):
+
+| Gate | Rule |
+|---|---|
+| Market cap | ≥ `MIN_MARKET_CAP` ($500B) |
+| YoY EPS growth | positive |
+| NTM EPS growth | positive |
+| EPS CAGR (5yr, expected) | positive |
+| Below the all-time high | trading below it |
+
+**Factor weights** — continuous, sum to 100; a name that passes every gate
+still needs `MIN_SCORE` (50) or better to be emailed (`src/lib/score.ts`
+`WEIGHTS`):
+
+| Factor | Weight |
+|---|---|
+| Growth engine (YoY, NTM, 5yr CAGR — averaged) | 30 |
+| SMA 150 proximity | 20 |
+| Tunnel position (regression channel) | 20 |
+| Golden zone (retracement) | 15 |
+| Room below the all-time high (drawdown) | 15 |
+
+### Two crons, one send
+`vercel.json` schedules `/api/digest` at both **10:00 and 11:00 UTC**, every
+day. Eastern time moves with DST, so on any given day exactly one of those two
+UTC times is 06:00 ET: 10:00 UTC in summer (EDT), 11:00 UTC in winter (EST).
+The route's hour guard discards whichever run lands at the wrong Eastern hour;
+the one that lands at 06:00 ET (or the 07:00 ET recovery hour, for a cron that
+fires late) claims the day and sends. Net: one send per Eastern day, at 6 AM,
+year-round, from a scheduler that only understands UTC.
+
+### Idempotency
+Before any mail goes out, the route inserts a row into
+`screener_digest_sends` keyed on the Eastern calendar date (`sent_on`). The
+UNIQUE constraint on that column means a retried or double-fired cron loses
+the race and exits without sending — the day is claimed before a single email
+is built, let alone sent.
+
+### Double opt-in
+Signing up (at `/daily`) creates a `pending` row in `screener_subscribers` and
+emails a confirm link. Clicking it flips the row to `confirmed`, and only
+`confirmed` rows ever receive the digest — an address someone else typed in
+never gets mail. Every digest email carries a working unsubscribe link, plus
+the `List-Unsubscribe` / `List-Unsubscribe-Post` headers Gmail needs to show
+its native one-click unsubscribe control; either path flips the row to
+`unsubscribed`.
+
+### Environment variables
+| Var | Value |
+|---|---|
+| `RESEND_API_KEY` | Resend API key. Unset = the send layer no-ops and logs instead of mailing anyone |
+| `DIGEST_FROM` | Sender identity, e.g. `TripleQ Group <daily@tripleqgroup.com>`. Requires the domain verified in Resend |
+| `NEXT_PUBLIC_SITE_URL` | Absolute origin for links inside emails. No trailing slash |
+| `DIGEST_TEST_EMAIL` | Sole recipient of `GET /api/digest?force=1`, for verifying a real send |
+
+### Migration
+`supabase/migrations/0029_subscribers.sql` (`screener_subscribers` +
+`screener_digest_sends`) must be applied before this works — see Deploy →
+Step 1.
