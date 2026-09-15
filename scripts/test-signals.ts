@@ -37,8 +37,10 @@ import {
   smaSeries,
   verdictFrom,
   inGoldenZone,
+  retracementRatio,
 } from '../src/lib/technicals'
 import type { Bar } from '../src/market-data/provider'
+import type { Fib } from '../src/lib/technicals'
 
 let failures = 0
 
@@ -402,6 +404,49 @@ async function main() {
   const singleTech = analyze([{ t: 0, o: 1, h: 1, l: 1, c: 1 }])
   eq(singleTech.verdict, 'insufficient-history', 'analyze single bar: verdict is insufficient-history')
   eq(singleTech.sma150[0], null, 'analyze single bar: sma150 null (warmup not satisfied)')
+
+  // ── Technicals: retracementRatio ─────────────────────────────────
+  console.log('\nTechnicals — retracementRatio')
+  // Note: named retRallyFib/retDeclineFib (not rallyFib/declineFib) — those
+  // names are already taken by the computeFib() test consts above, in the
+  // same function scope.
+  const retRallyFib: Fib = {
+    high: 200,
+    low: 100,
+    direction: 'rally',
+    anchor: 'swing',
+    levels: [],
+  }
+  // Rally: measured down from the high, so 150 is a 50% retracement.
+  approx(retracementRatio(150, retRallyFib), 0.5, 1e-9, 'rally: midpoint is ratio 0.5')
+  approx(retracementRatio(200, retRallyFib), 0, 1e-9, 'rally: the high is ratio 0')
+  approx(retracementRatio(100, retRallyFib), 1, 1e-9, 'rally: the low is ratio 1')
+  approx(retracementRatio(138.2, retRallyFib), 0.618, 1e-9, 'rally: 138.2 is the 0.618 level')
+
+  const retDeclineFib: Fib = {
+    high: 200,
+    low: 100,
+    direction: 'decline',
+    anchor: 'swing',
+    levels: [],
+  }
+  // Decline: measured up from the low, so 150 is still 0.5 but 161.8 is 0.618.
+  approx(retracementRatio(150, retDeclineFib), 0.5, 1e-9, 'decline: midpoint is ratio 0.5')
+  approx(retracementRatio(161.8, retDeclineFib), 0.618, 1e-9, 'decline: 161.8 is the 0.618 level')
+  eq(retracementRatio(150, null), null, 'retracementRatio: null fib returns null')
+  eq(
+    retracementRatio(100, { high: 100, low: 100, direction: 'rally', anchor: 'swing', levels: [] }),
+    null,
+    'retracementRatio: zero-span swing returns null, not a divide-by-zero',
+  )
+
+  // inGoldenZone must still agree with its documented behaviour, now that it
+  // delegates: on a rally the golden band is 138.2–150, on a decline 150–161.8.
+  eq(inGoldenZone(145, retRallyFib), true, 'inGoldenZone: rally, 145 is inside the band')
+  eq(inGoldenZone(180, retRallyFib), false, 'inGoldenZone: rally, 180 is above the band')
+  eq(inGoldenZone(155, retDeclineFib), true, 'inGoldenZone: decline, 155 is inside the band')
+  eq(inGoldenZone(120, retDeclineFib), false, 'inGoldenZone: decline, 120 is below the band')
+  eq(inGoldenZone(145, null), false, 'inGoldenZone: null fib is false')
 
   // ── Result ───────────────────────────────────────────────────────
   console.log('')
