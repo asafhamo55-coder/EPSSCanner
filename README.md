@@ -57,13 +57,26 @@ No RLS/auth/storage setup needed.
 
 Deploy. The app is live.
 
-### 3. Daily auto-refresh and the 6 AM ET digest
+### 3. Daily auto-refresh and the morning digest
 `vercel.json` registers two **Vercel Cron** jobs:
 - `/api/ingest` at 09:30 UTC every day — re-pulls fundamentals for the whole
   watchlist.
-- `/api/digest` at 10:00 **and** 11:00 UTC every day — the TripleQ Daily Maily
-  (see below). Both fire daily; the route's own clock guard keeps the actual
-  send down to exactly one, at 6 AM America/New_York, year-round.
+- `/api/digest` at 11:00 UTC every day — the TripleQ Daily Maily (see below).
+
+**Why 11:00 UTC, and what it means for delivery time.** Cron speaks only UTC,
+but Eastern moves with DST, so one fixed hour cannot be 06:00 ET all year.
+11:00 UTC is **07:00 ET in summer (EDT)** and **06:00 ET in winter (EST)**.
+Both land inside the route's 6-or-7 clock guard, so a digest goes out every
+day of the year, always well before the 09:30 open.
+
+10:00 UTC was rejected: its winter fire lands at 05:00 ET, outside the guard,
+which would silently stop the digest for the four months of EST.
+
+A **Vercel Hobby** plan caps crons at one run per day, which is what forces the
+single fire. On **Pro**, change the digest schedule to `0 10,11 * * *`: both
+hours fire, the clock guard discards the wrong one, the day-claim discards the
+duplicate, and delivery becomes exactly 06:00 ET year-round. No code change —
+only `vercel.json`.
 
 Vercel automatically sends `CRON_SECRET` as a Bearer token on both. Nothing
 else to wire — but you must set it: `/api/digest` returns 401 and refuses to

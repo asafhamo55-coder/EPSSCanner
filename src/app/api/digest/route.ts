@@ -15,10 +15,21 @@ import { db } from '@/lib/db'
 //   GET ?force=1   → bypasses the clock and the once-a-day guard, and sends ONLY
 //                    to DIGEST_TEST_EMAIL. For verifying a real send.
 //
-// Scheduled at "0 10,11 * * *" UTC because Eastern moves: 10:00 UTC is 06:00 ET
-// in summer and 11:00 UTC is 06:00 ET in winter. Both fire every day and the
-// hour guard below discards the wrong one, which is how this hits 6 AM ET
-// year-round from a UTC-only scheduler.
+// Scheduled at "0 11 * * *" UTC — a SINGLE daily fire, because this project is
+// on a Vercel Hobby plan, which rejects any cron expression that would run more
+// than once a day. Eastern moves, so one fixed UTC hour cannot be 06:00 ET all
+// year: 11:00 UTC is 07:00 ET in summer (EDT) and 06:00 ET in winter (EST).
+//
+// 11:00 was chosen over 10:00 deliberately. At 10:00 UTC the winter fire lands
+// at 05:00 ET, which the hour guard below rejects — the digest would silently
+// stop sending for the four months of EST and nobody would be paged. At 11:00
+// both seasons land inside the guard's 6-or-7 window, so a send happens every
+// day of the year. The cost is that summer delivery is 07:00 ET rather than
+// 06:00 — still comfortably before the 09:30 open.
+//
+// On a Pro plan, restore "0 10,11 * * *": both hours fire, the correct one
+// sends, and the day-claim below discards the other. That yields exactly 06:00
+// ET year-round.
 export const maxDuration = 60
 
 const TZ = 'America/New_York'
@@ -105,10 +116,12 @@ export async function GET(req: NextRequest) {
   const now = new Date()
   const today = easternDate(now)
 
-  // 1. Hour guard. Hour 7 is the late-fire recovery path: on a summer day the
-  //    10:00 UTC run already sent at 06:00 ET and the day-claim below stops
-  //    this one; on a winter day 10:00 UTC landed at 05:00 ET and was skipped
-  //    here, so 11:00 UTC at 06:00 ET is the one that sends.
+  // 1. Hour guard. Accepts Eastern hour 6 OR 7, which on the current single
+  //    11:00 UTC schedule means summer (07:00 ET) and winter (06:00 ET) both
+  //    pass. The window is deliberately two hours wide rather than pinned to 6:
+  //    it absorbs DST without code changes, tolerates a late-firing cron, and
+  //    keeps the Pro two-fire schedule working unchanged if this ever upgrades.
+  //    Sending twice is prevented by the day-claim below, not by this guard.
   if (!force) {
     const hour = easternHour(now)
     if (hour !== 6 && hour !== 7) {
