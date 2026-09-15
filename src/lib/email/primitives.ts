@@ -8,7 +8,14 @@
 
 /** Light-only palette. Email has no reliable dark-mode signal, so the design
  *  commits to light and sets every background explicitly rather than inheriting
- *  a client's default. */
+ *  a client's default.
+ *
+ *  `positive` / `negative` / `gold` are FILL colours — tuned for bars and
+ *  soft-background chips, not for text. None of the three clears WCAG AA as
+ *  small text on its matching soft background (or, for gold, on the white
+ *  card surface). `positiveInk` / `negativeInk` / `goldInk` are the dedicated
+ *  TEXT tokens for exactly those spots — do not "simplify" them back onto the
+ *  fill tokens, that regresses the contrast fix. */
 export const PALETTE = {
   ink: '#0f172a',
   body: '#334155',
@@ -20,10 +27,13 @@ export const PALETTE = {
   brandDeep: '#3730a3',
   positive: '#059669',
   positiveSoft: '#d1fae5',
+  positiveInk: '#065f46',   // emerald-800 — 6.8:1 on positiveSoft
   negative: '#dc2626',
   negativeSoft: '#fee2e2',
+  negativeInk: '#991b1b',   // red-800 — 6.8:1 on negativeSoft
   gold: '#d97706',
   goldSoft: '#fef3c7',
+  goldInk: '#b45309',       // amber-700 — 5.0:1 on white
   track: '#e2e8f0',
 } as const
 
@@ -127,7 +137,7 @@ export function goldenBand(opts: { ratio: number | null }): string {
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 10px 0;">
   <tr>
     <td style="font:400 11px ${FONT};color:${PALETTE.muted};padding:0 0 3px 0;">Golden zone</td>
-    <td align="right" style="font:700 11px ${FONT};color:${inZone ? PALETTE.gold : PALETTE.muted};padding:0 0 3px 0;">${inZone ? '⭐ ' : ''}${escapeHtml(label)}</td>
+    <td align="right" style="font:700 11px ${FONT};color:${inZone ? PALETTE.goldInk : PALETTE.muted};padding:0 0 3px 0;">${inZone ? '⭐ ' : ''}${escapeHtml(label)}</td>
   </tr>
   <tr>
     <td colspan="2" style="padding:0;">
@@ -159,7 +169,7 @@ export function goldenBand(opts: { ratio: number | null }): string {
 /** A small pill for a green/red reading. */
 export function chip(opts: { label: string; value: string; positive: boolean }): string {
   const bg = opts.positive ? PALETTE.positiveSoft : PALETTE.negativeSoft
-  const fg = opts.positive ? PALETTE.positive : PALETTE.negative
+  const fg = opts.positive ? PALETTE.positiveInk : PALETTE.negativeInk
   return `<td align="center" style="padding:0 4px 0 0;">
   <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:${bg};border-radius:6px;">
     <tr><td align="center" style="padding:6px 4px;font:400 10px ${FONT};color:${fg};">${escapeHtml(opts.label)}<br><span style="font:700 13px ${FONT};color:${fg};">${escapeHtml(opts.value)}</span></td></tr>
@@ -171,11 +181,12 @@ export function chip(opts: { label: string; value: string; positive: boolean }):
 export function meter(opts: { score: number }): string {
   const w = clampPct(opts.score)
   const color = opts.score >= 80 ? PALETTE.positive : opts.score >= 65 ? PALETTE.brand : PALETTE.gold
+  const textColor = opts.score >= 80 ? PALETTE.positiveInk : opts.score >= 65 ? PALETTE.brand : PALETTE.goldInk
   return `
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
   <tr>
     <td style="font:400 11px ${FONT};color:${PALETTE.muted};padding:0 0 3px 0;">TripleQ Score</td>
-    <td align="right" style="font:700 18px ${FONT};color:${color};padding:0 0 3px 0;">${opts.score.toFixed(1)}<span style="font:400 11px ${FONT};color:${PALETTE.muted};">/100</span></td>
+    <td align="right" style="font:700 18px ${FONT};color:${textColor};padding:0 0 3px 0;">${opts.score.toFixed(1)}<span style="font:400 11px ${FONT};color:${PALETTE.muted};">/100</span></td>
   </tr>
   <tr>
     <td colspan="2" style="padding:0;">
@@ -214,13 +225,13 @@ export function shell(opts: {
       <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:600px;max-width:600px;">
         ${opts.bodyHtml}
         <tr>
-          <td style="padding:20px 24px 8px 24px;font:400 11px ${FONT};color:${PALETTE.muted};line-height:1.6;">
+          <td style="background:${PALETTE.surface};padding:20px 24px 8px 24px;font:400 11px ${FONT};color:${PALETTE.muted};line-height:1.6;">
             Fundamental signals only — not investment advice.<br>
             ${opts.footerLinksHtml}
           </td>
         </tr>
         <tr>
-          <td style="padding:0 24px 28px 24px;font:700 13px ${FONT};color:${PALETTE.ink};">
+          <td style="background:${PALETTE.surface};padding:0 24px 28px 24px;font:700 13px ${FONT};color:${PALETTE.ink};">
             TripleQ Group
           </td>
         </tr>
