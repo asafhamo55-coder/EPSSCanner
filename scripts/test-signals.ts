@@ -41,6 +41,7 @@ import {
 } from '../src/lib/technicals'
 import type { Bar } from '../src/market-data/provider'
 import type { Fib } from '../src/lib/technicals'
+import { epsCagr5yr, pctFromAth, vsSma150Pct } from '../src/lib/derive'
 
 let failures = 0
 
@@ -447,6 +448,23 @@ async function main() {
   eq(inGoldenZone(155, retDeclineFib), true, 'inGoldenZone: decline, 155 is inside the band')
   eq(inGoldenZone(120, retDeclineFib), false, 'inGoldenZone: decline, 120 is below the band')
   eq(inGoldenZone(145, null), false, 'inGoldenZone: null fib is false')
+
+  // ── Derivations ──────────────────────────────────────────────────
+  console.log('\nDerivations')
+  approx(epsCagr5yr(30, 1.5), 20, 1e-9, 'epsCagr5yr: P/E 30 ÷ PEG 1.5 = 20%')
+  eq(epsCagr5yr(30, 0), null, 'epsCagr5yr: PEG of 0 returns null, not Infinity')
+  eq(epsCagr5yr(null, 1.5), null, 'epsCagr5yr: missing P/E returns null')
+  eq(epsCagr5yr(30, null), null, 'epsCagr5yr: missing PEG returns null')
+
+  approx(pctFromAth(80, 100), -20, 1e-9, 'pctFromAth: 80 vs ATH 100 is -20%')
+  approx(pctFromAth(100, 100), 0, 1e-9, 'pctFromAth: at the ATH is 0%')
+  eq(pctFromAth(80, 0), null, 'pctFromAth: ATH of 0 returns null')
+  eq(pctFromAth(null, 100), null, 'pctFromAth: missing price returns null')
+
+  approx(vsSma150Pct(110, 100), 10, 1e-9, 'vsSma150Pct: 10% above the SMA')
+  approx(vsSma150Pct(90, 100), -10, 1e-9, 'vsSma150Pct: 10% below the SMA')
+  eq(vsSma150Pct(110, 0), null, 'vsSma150Pct: SMA of 0 returns null')
+  eq(vsSma150Pct(110, null), null, 'vsSma150Pct: missing SMA returns null')
 
   // ── Result ───────────────────────────────────────────────────────
   console.log('')

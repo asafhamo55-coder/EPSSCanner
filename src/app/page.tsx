@@ -4,6 +4,7 @@ import { LineChart, Plus } from 'lucide-react'
 import { Button, EmptyState, PageHeader } from '@/ui'
 import { getWatchlist, type TickerData } from '@/lib/queries'
 import { pct } from '@/lib/format'
+import { epsCagr5yr as deriveEpsCagr5yr, pctFromAth as derivePctFromAth } from '@/lib/derive'
 import { AddTickerForm } from '@/components/AddTickerForm'
 import { RefreshButton } from '@/components/RefreshButton'
 import { WatchlistTable, type WatchlistRow } from '@/components/WatchlistTable'
@@ -25,8 +26,7 @@ function toRow(t: TickerData): WatchlistRow {
   const sc = t.scorecard
   // EPS CAGR (5-yr expected) = trailing P/E ÷ PEG ratio (5-yr expected).
   const peg5yr = t.valuation.peg5yr
-  const epsCagr5yr =
-    sc.pe.trailingPe != null && peg5yr != null && peg5yr !== 0 ? sc.pe.trailingPe / peg5yr : null
+  const epsCagr5yr = deriveEpsCagr5yr(sc.pe.trailingPe, peg5yr)
   const yoyLabel =
     sc.yoy.state === 'turnaround' ? 'Turnaround' : sc.yoy.state === 'na' ? 'N/A' : pct(sc.yoy.pct)
   const qoqLabel = sc.qoq.label === 'na' ? 'N/A' : capitalize(sc.qoq.label)
@@ -39,8 +39,7 @@ function toRow(t: TickerData): WatchlistRow {
   // ≤ 0 (0 = making new highs). Null when either input is missing.
   const ath = t.valuation.allTimeHigh
   const price = t.valuation.price
-  const pctFromAth =
-    ath != null && ath !== 0 && price != null ? ((price - ath) / ath) * 100 : null
+  const pctFromAth = derivePctFromAth(price, ath)
   return {
     symbol: t.symbol,
     name: t.name,
