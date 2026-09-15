@@ -155,7 +155,7 @@ const picks: ScoredPick[] = FIXTURES.map((f) => {
 console.log('Fixture scores (rank, symbol, score):')
 picks.forEach((p, i) => console.log(`  ${i + 1}. ${p.symbol} — ${p.score.toFixed(1)}/100`))
 
-const selection: Selection = { picks, considered: 61, gated: 3 }
+const selection: Selection = { picks, considered: 61, belowCutoff: 3 }
 
 const { subject, html } = renderDigest({
   recipient: { firstName: 'Asaf', unsubscribeToken: 'preview-token' },
@@ -172,7 +172,7 @@ console.log('wrote .preview/digest.html — open it in a browser')
 // Also render the empty state, which is the easiest variant to get wrong.
 const empty = renderDigest({
   recipient: { firstName: 'Asaf', unsubscribeToken: 'preview-token' },
-  selection: { picks: [], considered: 61, gated: 2 },
+  selection: { picks: [], considered: 61, belowCutoff: 2 },
   asOfLabel: 'Monday, 14 September 2026',
   siteUrl: 'https://tripleqgroup.vercel.app',
 })

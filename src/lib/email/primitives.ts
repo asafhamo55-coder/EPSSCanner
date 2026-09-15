@@ -5,6 +5,21 @@
 // inline SVG entirely. So every "chart" here is a nested table whose cells have
 // background colours and percentage widths — the only charting primitive that
 // renders the same everywhere.
+//
+// Stays pure (no I/O, no React, no Date) per the model constant it imports
+// below — score.ts is pure too, so importing its tuning constants here does
+// not compromise that.
+
+import { GOLDEN_KNOTS } from '@/lib/score'
+
+/** The golden-zone curve's domain (shallow/deep taper-to-zero knots) and its
+ *  full-credit band (the two knots scoring 1), both read off GOLDEN_KNOTS
+ *  rather than restated as literals. */
+const GOLDEN_DOMAIN_LOW = GOLDEN_KNOTS[0][0]
+const GOLDEN_DOMAIN_HIGH = GOLDEN_KNOTS[GOLDEN_KNOTS.length - 1][0]
+const GOLDEN_FULL_CREDIT = GOLDEN_KNOTS.filter(([, y]) => y === 1).map(([x]) => x)
+const GOLDEN_ZONE_LOW = GOLDEN_FULL_CREDIT[0]
+const GOLDEN_ZONE_HIGH = GOLDEN_FULL_CREDIT[GOLDEN_FULL_CREDIT.length - 1]
 
 /** Light-only palette. Email has no reliable dark-mode signal, so the design
  *  commits to light and sets every background explicitly rather than inheriting
@@ -15,7 +30,15 @@
  *  small text on its matching soft background (or, for gold, on the white
  *  card surface). `positiveInk` / `negativeInk` / `goldInk` are the dedicated
  *  TEXT tokens for exactly those spots — do not "simplify" them back onto the
- *  fill tokens, that regresses the contrast fix. */
+ *  fill tokens, that regresses the contrast fix.
+ *
+ *  `warningSoft` / `warningInk` are a separate amber pair for signal-state
+ *  chips (see render.ts's chipTone) — deliberately distinct from `gold` /
+ *  `goldSoft` / `goldInk`, which are the golden-zone RETRACEMENT chart's
+ *  colours and carry no relation to a signal's pass/flag/fail state.
+ *  warningInk on warningSoft measures 6.37:1, comfortably clearing WCAG AA's
+ *  4.5:1 for small text (computed via the standard relative-luminance
+ *  formula: amber-800 #92400e on amber-100 #fef3c7). */
 export const PALETTE = {
   ink: '#0f172a',
   body: '#334155',
@@ -34,8 +57,18 @@ export const PALETTE = {
   gold: '#d97706',
   goldSoft: '#fef3c7',
   goldInk: '#b45309',       // amber-700 — 5.0:1 on white
+  warningSoft: '#fef3c7',   // amber-100
+  warningInk: '#92400e',    // amber-800 — 6.37:1 on warningSoft
   track: '#e2e8f0',
 } as const
+
+/** Presentation-only score bands for the meter's fill/text colour — where a
+ *  score is painted, not what qualifies it for the email. Deliberately not
+ *  model thresholds: MIN_SCORE (score.ts) is the only number that decides
+ *  whether a pick is emailed at all; these two just pick a colour for
+ *  whatever score already cleared that bar. */
+export const METER_STRONG_AT = 80
+export const METER_GOOD_AT = 65
 
 export const FONT =
   "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
@@ -124,16 +157,16 @@ export function markerBar(opts: {
  *  highlighted and the close marked. Widths are the real proportions of the
  *  band, so the picture is to scale. */
 export function goldenBand(opts: { ratio: number | null }): string {
-  const LOW = 0.236
-  const HIGH = 0.786
+  const LOW = GOLDEN_DOMAIN_LOW
+  const HIGH = GOLDEN_DOMAIN_HIGH
   const span = HIGH - LOW
-  const goldStart = ((0.5 - LOW) / span) * 100
-  const goldEnd = ((0.618 - LOW) / span) * 100
+  const goldStart = ((GOLDEN_ZONE_LOW - LOW) / span) * 100
+  const goldEnd = ((GOLDEN_ZONE_HIGH - LOW) / span) * 100
   const label =
     opts.ratio == null ? 'no swing anchored' : `${(opts.ratio * 100).toFixed(1)}% retracement`
   const marker =
     opts.ratio == null ? null : clampPct(((opts.ratio - LOW) / span) * 100)
-  const inZone = opts.ratio != null && opts.ratio >= 0.5 && opts.ratio <= 0.618
+  const inZone = opts.ratio != null && opts.ratio >= GOLDEN_ZONE_LOW && opts.ratio <= GOLDEN_ZONE_HIGH
   return `
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 10px 0;">
   <tr>
@@ -161,16 +194,26 @@ export function goldenBand(opts: { ratio: number | null }): string {
   </tr></table></td></tr>`
   }
   <tr>
-    <td style="font:400 10px ${FONT};color:${PALETTE.muted};padding:2px 0 0 0;">0.236</td>
-    <td align="right" style="font:400 10px ${FONT};color:${PALETTE.muted};padding:2px 0 0 0;">0.786</td>
+    <td style="font:400 10px ${FONT};color:${PALETTE.muted};padding:2px 0 0 0;">${GOLDEN_DOMAIN_LOW}</td>
+    <td align="right" style="font:400 10px ${FONT};color:${PALETTE.muted};padding:2px 0 0 0;">${GOLDEN_DOMAIN_HIGH}</td>
   </tr>
 </table>`
 }
 
-/** A small pill for a green/red reading. */
-export function chip(opts: { label: string; value: string; positive: boolean }): string {
-  const bg = opts.positive ? PALETTE.positiveSoft : PALETTE.negativeSoft
-  const fg = opts.positive ? PALETTE.positiveInk : PALETTE.negativeInk
+/** A small pill for a green/amber/red reading. `tone` should track the
+ *  underlying SignalState where one exists (see render.ts's chipTone) —
+ *  callers with no signal state of their own (e.g. the CAGR chip) fall back
+ *  to the sign of the value. */
+export type ChipTone = 'positive' | 'warning' | 'negative'
+
+const CHIP_COLORS: Record<ChipTone, { bg: string; fg: string }> = {
+  positive: { bg: PALETTE.positiveSoft, fg: PALETTE.positiveInk },
+  warning: { bg: PALETTE.warningSoft, fg: PALETTE.warningInk },
+  negative: { bg: PALETTE.negativeSoft, fg: PALETTE.negativeInk },
+}
+
+export function chip(opts: { label: string; value: string; tone: ChipTone }): string {
+  const { bg, fg } = CHIP_COLORS[opts.tone]
   return `<td align="center" style="padding:0 4px 0 0;">
   <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:${bg};border-radius:6px;">
     <tr><td align="center" style="padding:6px 4px;font:400 10px ${FONT};color:${fg};">${escapeHtml(opts.label)}<br><span style="font:700 13px ${FONT};color:${fg};">${escapeHtml(opts.value)}</span></td></tr>
@@ -181,8 +224,14 @@ export function chip(opts: { label: string; value: string; positive: boolean }):
 /** The score meter: a number and a proportional fill, coloured by band. */
 export function meter(opts: { score: number }): string {
   const w = clampPct(opts.score)
-  const color = opts.score >= 80 ? PALETTE.positive : opts.score >= 65 ? PALETTE.brand : PALETTE.gold
-  const textColor = opts.score >= 80 ? PALETTE.positiveInk : opts.score >= 65 ? PALETTE.brand : PALETTE.goldInk
+  const color =
+    opts.score >= METER_STRONG_AT ? PALETTE.positive : opts.score >= METER_GOOD_AT ? PALETTE.brand : PALETTE.gold
+  const textColor =
+    opts.score >= METER_STRONG_AT
+      ? PALETTE.positiveInk
+      : opts.score >= METER_GOOD_AT
+        ? PALETTE.brand
+        : PALETTE.goldInk
   return `
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
   <tr>

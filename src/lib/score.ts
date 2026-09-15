@@ -129,8 +129,10 @@ export interface Selection {
   picks: ScoredPick[]
   /** How many tickers were fed in. */
   considered: number
-  /** How many cleared every gate but fell below MIN_SCORE. */
-  gated: number
+  /** How many PASSED every gate but fell below MIN_SCORE. Named for what it
+   *  counts, not the mechanism — "gated" read as the opposite of what it
+   *  measures (names that cleared the gates, not names the gates stopped). */
+  belowCutoff: number
 }
 
 // ─── Curve helpers ──────────────────────────────────────────────────
@@ -358,6 +360,6 @@ export function selectPicks(inputs: ScoreInput[]): Selection {
   return {
     picks,
     considered: inputs.length,
-    gated: passed.length - above.length,
+    belowCutoff: passed.length - above.length,
   }
 }

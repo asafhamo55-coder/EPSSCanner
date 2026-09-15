@@ -658,7 +658,7 @@ async function main() {
   eq(sel.picks.length, 1, 'selection: only the qualifying, above-cutoff name is picked')
   eq(sel.picks[0].symbol, 'BBB', 'selection: the picked name is the one that qualified')
   eq(sel.considered, 3, 'selection: reports how many were considered')
-  eq(sel.gated, 1, 'selection: reports how many cleared the gates but missed the cutoff')
+  eq(sel.belowCutoff, 1, 'selection: reports how many cleared the gates but missed the cutoff')
 
   // Ordering and the cap.
   const many = Array.from({ length: 14 }, (_, i) =>

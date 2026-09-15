@@ -4,7 +4,8 @@
 
 import { bigUsd, num, pct, usd } from '@/lib/format'
 import type { ScoredPick, Selection } from '@/lib/score'
-import { MAX_PICKS, MIN_MARKET_CAP, MIN_SCORE } from '@/lib/score'
+import { DRAWDOWN_KNOTS, MAX_PICKS, MIN_MARKET_CAP, MIN_SCORE, SMA_ZERO_AT_PCT } from '@/lib/score'
+import type { SignalState } from '@/lib/signals'
 import {
   bar,
   chip,
@@ -14,6 +15,7 @@ import {
   markerBar,
   meter,
   PALETTE,
+  type ChipTone,
   shell,
 } from './primitives'
 
@@ -31,21 +33,51 @@ export interface DigestData {
   siteUrl: string
 }
 
-/** Where the "% vs SMA" marker sits on its track. ±15% maps to the full width,
- *  so the centre is the SMA itself and the scale matches the factor's domain. */
+/** The drawdown factor's domain is [0, last knot] — the same curve
+ *  runFactors() scores against, so the bar's scale can't drift from what
+ *  actually earns points. */
+const DRAWDOWN_DOMAIN_MAX = DRAWDOWN_KNOTS[DRAWDOWN_KNOTS.length - 1][0]
+
+/** Where the "% vs SMA" marker sits on its track. ±SMA_ZERO_AT_PCT maps to the
+ *  full width, so the centre is the SMA itself and the scale matches the
+ *  factor's own zero-credit domain in score.ts — not a restated literal. */
 function smaMarkerPct(v: number | null): number {
   if (v == null) return 50
-  return 50 + (Math.max(-15, Math.min(15, v)) / 15) * 50
+  return 50 + (Math.max(-SMA_ZERO_AT_PCT, Math.min(SMA_ZERO_AT_PCT, v)) / SMA_ZERO_AT_PCT) * 50
+}
+
+/** Colour a YoY/NTM chip from the underlying SignalState, not from the sign
+ *  of the percentage — signals.ts sets 'pass' only at ≥20% YoY (≥15% NTM),
+ *  and a 'flag' name (soft-positive, 0–20%/0–15%) must read amber here the
+ *  same way SignalChip.tsx reads it amber on the dashboard, not green. */
+function chipTone(state: SignalState): ChipTone {
+  if (state === 'pass' || state === 'turnaround') return 'positive'
+  if (state === 'flag') return 'warning'
+  return 'negative' // 'fail' | 'na'
+}
+
+/** Join reasons as a proper list: "a.", "a and b.", or "a, b, and c." — not
+ *  string-concatenated in a way that reads as "a, and b, c". */
+function joinReasons(items: string[]): string {
+  if (items.length <= 1) return items[0] ?? ''
+  if (items.length === 2) return `${items[0]} and ${items[1]}`
+  return `${items.slice(0, -1).join(', ')}, and ${items[items.length - 1]}`
 }
 
 function logoUrl(symbol: string): string {
   return `https://assets.parqet.com/logos/symbol/${encodeURIComponent(symbol)}?format=png`
 }
 
+/** EPS CAGR has no SignalState of its own — score.ts derives it algebraically
+ *  from PEG (see epsCagr5yr in derive.ts), not from signals.ts — so its chip
+ *  below stays coloured on the sign of the value, unlike YoY/NTM. */
 function card(p: ScoredPick, rank: number, siteUrl: string): string {
   const href = `${siteUrl}/ticker/${encodeURIComponent(p.symbol)}`
   const reason = p.reasons.length
-    ? `${p.reasons[0].charAt(0).toUpperCase()}${p.reasons[0].slice(1)}${p.reasons.length > 1 ? `, and ${p.reasons.slice(1).join(', ')}` : ''}.`
+    ? (() => {
+        const joined = joinReasons(p.reasons)
+        return `${joined.charAt(0).toUpperCase()}${joined.slice(1)}.`
+      })()
     : 'Cleared every entry gate.'
   return `
 <tr><td style="padding:0 0 14px 0;">
@@ -88,9 +120,9 @@ function card(p: ScoredPick, rank: number, siteUrl: string): string {
       <td style="padding:0 18px 4px 18px;">
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
           <tr>
-            ${chip({ label: '📈 YoY EPS', value: pct(p.yoyPct, 0), positive: (p.yoyPct ?? 0) > 0 })}
-            ${chip({ label: '🔮 NTM EPS', value: pct(p.ntmPct, 0), positive: (p.ntmPct ?? 0) > 0 })}
-            ${chip({ label: '🚀 CAGR 5y', value: pct(p.epsCagr5yr, 0), positive: (p.epsCagr5yr ?? 0) > 0 })}
+            ${chip({ label: '📈 YoY EPS', value: pct(p.yoyPct, 0), tone: chipTone(p.input.yoyState) })}
+            ${chip({ label: '🔮 NTM EPS', value: pct(p.ntmPct, 0), tone: chipTone(p.input.ntmState) })}
+            ${chip({ label: '🚀 CAGR 5y', value: pct(p.epsCagr5yr, 0), tone: (p.epsCagr5yr ?? 0) > 0 ? 'positive' : 'negative' })}
           </tr>
         </table>
       </td>
@@ -102,8 +134,8 @@ function card(p: ScoredPick, rank: number, siteUrl: string): string {
           value: pct(p.vsSma150Pct),
           markerPct: smaMarkerPct(p.vsSma150Pct),
           color: PALETTE.brand,
-          leftCap: '−15%',
-          rightCap: '+15%',
+          leftCap: `−${SMA_ZERO_AT_PCT}%`,
+          rightCap: `+${SMA_ZERO_AT_PCT}%`,
         })}
         ${bar({
           label: '🎯 Tunnel position (lower is better)',
@@ -118,7 +150,10 @@ function card(p: ScoredPick, rank: number, siteUrl: string): string {
         ${bar({
           label: '🏔️ Room below the all-time high',
           value: pct(p.pctFromAth),
-          fillPct: p.pctFromAth == null ? 0 : Math.min(100, (Math.abs(p.pctFromAth) / 45) * 100),
+          fillPct:
+            p.pctFromAth == null
+              ? 0
+              : Math.min(100, (Math.abs(p.pctFromAth) / DRAWDOWN_DOMAIN_MAX) * 100),
           color: PALETTE.gold,
         })}
       </td>
@@ -190,7 +225,7 @@ export function renderDigest(data: DigestData): { subject: string; html: string;
   ${
     n === 0
       ? `None of ${data.selection.considered} watchlist names cleared this morning's entry gate.`
-      : `${n} of ${data.selection.considered} watchlist names cleared the entry gate and scored ${MIN_SCORE} or better${data.selection.gated > 0 ? `; ${data.selection.gated} more passed the gate but fell short on score` : ''}. Ranked best first, ${MAX_PICKS} maximum.`
+      : `${n} of ${data.selection.considered} watchlist names cleared the entry gate and scored ${MIN_SCORE} or better${data.selection.belowCutoff > 0 ? `; ${data.selection.belowCutoff} more passed the gate but fell short on score` : ''}. Ranked best first, ${MAX_PICKS} maximum.`
   }
 </td></tr>`
 
