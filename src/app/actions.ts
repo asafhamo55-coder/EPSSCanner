@@ -177,9 +177,27 @@ export async function getTechnicals(symbol: string): Promise<Technicals | null> 
   }
 }
 
+// firstName/lastName are interpolated into the confirmation email's subject
+// and body (see renderConfirm). Length is bounded below, but a name is
+// otherwise free text from a public form — reject control characters (CR/LF
+// included) so nothing can inject a header/line break into anything built
+// from these values.
+const NO_CONTROL_CHARS = /^[^\x00-\x1F\x7F]*$/
+const CONTROL_CHAR_MSG = 'Remove line breaks or control characters.'
+
 const SubscribeInput = z.object({
-  firstName: z.string().trim().min(1, 'Enter your first name.').max(60),
-  lastName: z.string().trim().min(1, 'Enter your last name.').max(60),
+  firstName: z
+    .string()
+    .trim()
+    .min(1, 'Enter your first name.')
+    .max(60)
+    .regex(NO_CONTROL_CHARS, CONTROL_CHAR_MSG),
+  lastName: z
+    .string()
+    .trim()
+    .min(1, 'Enter your last name.')
+    .max(60)
+    .regex(NO_CONTROL_CHARS, CONTROL_CHAR_MSG),
   email: z.string().trim().toLowerCase().email('Enter a valid email address.').max(254),
 })
 
@@ -211,13 +229,29 @@ export async function subscribeAction(input: {
       // And the form stops waiting on a third-party HTTP round-trip it does
       // not need to block on.
       after(async () => {
-        await sendEmails([
+        const report = await sendEmails([
           { to: subscriber.email, subject: mail.subject, html: mail.html, text: mail.text },
         ])
+        // The response already told the browser "check your inbox" before this
+        // runs (that's the point of `after()`), so a failed send here is
+        // otherwise invisible — nothing arrives and nothing says why. Log the
+        // outcome, not the address: this is the same PII-in-logs concern as
+        // sendEmails' own no-key branch.
+        if (report.failed > 0 || report.errors.length > 0) {
+          console.error(
+            `[subscribe] confirmation send failed (${report.failed} failed): ${report.errors.join('; ')}`,
+          )
+        }
       })
     }
     return { ok: true, message: 'Check your inbox — confirm the link and your first digest arrives at 6 AM ET.' }
   } catch (e) {
-    return { ok: false, error: (e as Error).message }
+    // Never return the raw DB error to the browser: a unique-violation race
+    // between two concurrent signups for the same address must not leak
+    // through and give this public form a way to distinguish "already
+    // subscribed" from "new" by error text, undermining the identical success
+    // copy above. Log the detail server-side instead.
+    console.error('[subscribe] failed:', e)
+    return { ok: false, error: 'Something went wrong — try again in a moment.' }
   }
 }

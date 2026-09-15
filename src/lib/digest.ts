@@ -22,6 +22,17 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
 
 export async function buildSelection(): Promise<Selection> {
   const watchlist = await getWatchlist()
+  // getWatchlist() swallows its own Supabase error and returns [] on a read
+  // failure — intentional for the dashboard, which should degrade rather than
+  // 500. But an empty watchlist is never a legitimate state for THIS app (the
+  // whole point of the feature is a non-empty watchlist to score), so treat
+  // it as the read failure it actually is. The caller (the digest route) has
+  // a releaseDigestDay() path built exactly for this: throwing here lets a
+  // claimed day be retried instead of recording "None of 0 watchlist names
+  // cleared this morning's entry gate" as a successfully sent digest.
+  if (watchlist.length === 0) {
+    throw new Error('buildSelection: watchlist came back empty — treating as a read failure')
+  }
   const inputs: ScoreInput[] = await mapLimit(watchlist, TECHNICALS_CONCURRENCY, async (t) => {
     const sc = t.scorecard
     return {

@@ -49,7 +49,7 @@ No RLS/auth/storage setup needed.
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase → Settings → API → `service_role` (server-only) |
 | `MARKET_DATA_PROVIDER` | `fmp` for live data, or `mock` to demo |
 | `MARKET_DATA_FMP_API_KEY` | free key from financialmodelingprep.com (only for `fmp`) |
-| `CRON_SECRET` | *(optional)* random string; protects `/api/ingest` and `/api/digest` |
+| `CRON_SECRET` | **required.** Random string; protects `/api/ingest` and `/api/digest`. `/api/digest` fails closed (401) with no key set — without this, the digest endpoint is disabled |
 | `RESEND_API_KEY` | Resend API key. Unset = the send layer no-ops and logs instead of mailing anyone |
 | `DIGEST_FROM` | Sender identity, e.g. `TripleQ Group <daily@tripleqgroup.com>`. Requires the domain verified in Resend |
 | `NEXT_PUBLIC_SITE_URL` | Absolute origin for links inside emails, e.g. `https://tripleqgroup.vercel.app`. No trailing slash |
@@ -65,8 +65,10 @@ Deploy. The app is live.
   (see below). Both fire daily; the route's own clock guard keeps the actual
   send down to exactly one, at 6 AM America/New_York, year-round.
 
-If `CRON_SECRET` is set, Vercel automatically sends it as a Bearer token on
-both. Nothing else to wire.
+Vercel automatically sends `CRON_SECRET` as a Bearer token on both. Nothing
+else to wire — but you must set it: `/api/digest` returns 401 and refuses to
+run without it (`/api/ingest` tolerates it being unset; `/api/digest` does
+not, because it spends money on a Yahoo fan-out and a real Resend send).
 
 > **Note on live data:** FMP's free tier doesn't expose forward P/E, so **Step 5
 > shows N/A** on live data until you add a forward-EPS source or upgrade FMP.

@@ -52,9 +52,15 @@ function easternLabel(now: Date): string {
   }).format(now)
 }
 
+/** Fails CLOSED, unlike /api/ingest's identically-named helper: this route runs
+ *  ingestAllActive() over the whole watchlist and a real Resend send, and its
+ *  JSON response leaks the subscriber count. /api/ingest spends no money and
+ *  sends no mail, so it can stay open when CRON_SECRET is unset — this one
+ *  cannot, because CRON_SECRET is not currently set on the live Vercel
+ *  project and an open digest endpoint is an open "mail everyone" button. */
 function authorized(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET
-  if (!secret) return true
+  if (!secret) return false
   return req.headers.get('authorization') === `Bearer ${secret}`
 }
 
@@ -80,6 +86,14 @@ async function snapshotIsFresh(today: string): Promise<boolean> {
 export async function GET(req: NextRequest) {
   if (!authorized(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
+  // Never claim a day we cannot send: without RESEND_API_KEY, sendEmails() is a
+  // no-op (see src/lib/email/send.ts), so claiming today's row here would burn
+  // the UNIQUE sent_on slot on a send that provably never happened, making the
+  // day permanently unsendable once the key is added.
+  if (!process.env.RESEND_API_KEY) {
+    return NextResponse.json({ ok: true, skipped: 'no-api-key' })
+  }
+
   const force = req.nextUrl.searchParams.get('force') === '1'
   const now = new Date()
   const today = easternDate(now)
@@ -98,10 +112,12 @@ export async function GET(req: NextRequest) {
   try {
     // 2. Freshness. Refresh ourselves if the ingest cron did not run or failed.
     let refreshed = 0
+    let didIngest = false
     if (!(await snapshotIsFresh(today))) {
       const results = await ingestAllActive()
       refreshed = results.length
-      publish()
+      didIngest = true
+      // publish() is deliberately NOT called here — see step 4.
     }
 
     // 3. Claim the day BEFORE sending anything, so a retry cannot double-mail.
@@ -120,6 +136,15 @@ export async function GET(req: NextRequest) {
     try {
       // 4. Build.
       const selection = await buildSelection()
+      // publish() invalidates the 'yahoo-live' cache tag (SMA/ATH/PEG/technicals)
+      // that buildSelection() just read. Calling it BEFORE the build (as this
+      // route used to) would make this same request pay to repopulate the
+      // cache it had just dropped. Those live fields move slowly relative to
+      // the fundamentals ingestAllActive() refreshes, so building from the
+      // still-warm cache is fine — invalidating afterwards just makes sure the
+      // NEXT reader (the /daily preview, the dashboard) sees fresh data
+      // without this request footing that bill.
+      if (didIngest) publish()
       const origin = siteUrl()
       const asOfLabel = easternLabel(now)
 
@@ -161,8 +186,11 @@ export async function GET(req: NextRequest) {
       const report = await sendEmails(messages)
 
       // Nothing reads the JSON response at 6 AM, so a failed or partial send
-      // must show up somewhere an alert or a human can see it.
-      if (report.failed > 0) {
+      // must show up somewhere an alert or a human can see it. errors.length
+      // is checked too, not just failed > 0: a misconfiguration (e.g. no
+      // RESEND_API_KEY) can produce errors without every failed message being
+      // separately counted, and either signal alone means something to see.
+      if (report.failed > 0 || report.errors.length > 0) {
         console.error(
           `[digest] ${report.failed}/${messages.length} message(s) failed to send: ${report.errors.join('; ')}`,
         )

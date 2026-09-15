@@ -52,11 +52,18 @@ export async function sendEmails(messages: EmailMessage[]): Promise<SendReport> 
 
   const key = process.env.RESEND_API_KEY
   if (!key) {
-    console.warn(
-      `[email] RESEND_API_KEY is not set — not sending ${messages.length} message(s). ` +
-        `Recipients would have been: ${messages.map((m) => m.to).join(', ')}`,
-    )
-    return { sent: 0, failed: 0, errors: ['RESEND_API_KEY not set — send skipped'] }
+    // Log the COUNT, never the addresses — this branch is exactly the
+    // misconfiguration (no RESEND_API_KEY) that would otherwise dump the
+    // full confirmed-subscriber list into Vercel logs on every digest run.
+    console.warn(`[email] RESEND_API_KEY is not set — not sending ${messages.length} message(s).`)
+    // `failed`, not `sent: 0, failed: 0`: the caller's only alarm is
+    // `report.failed > 0` (and now `report.errors.length > 0`), so reporting
+    // zero failures here would say nothing went wrong when nothing went out.
+    return {
+      sent: 0,
+      failed: messages.length,
+      errors: ['RESEND_API_KEY not set — send skipped'],
+    }
   }
 
   const report: SendReport = { sent: 0, failed: 0, errors: [] }
@@ -87,7 +94,29 @@ export async function sendEmails(messages: EmailMessage[]): Promise<SendReport> 
         report.failed += batch.length
         report.errors.push(`batch ${i + 1}: HTTP ${res.status} ${body.slice(0, 300)}`)
       } else {
-        report.sent += batch.length
+        // HTTP 200 does not mean every message in the batch actually sent —
+        // Resend's batch endpoint returns {"data":[{"id":...},...]}, one entry
+        // per message that went out. Count that array when the body parses as
+        // one; only fall back to assuming the whole batch succeeded when the
+        // body is missing or not the shape we expect, so a malformed-but-200
+        // response can't quietly overcount `sent` (this is the same class of
+        // bug as an unset API key: `report.failed` is the route's only alarm,
+        // so overcounting `sent` is silent data loss, not an accounting nit).
+        const text = await res.text().catch(() => '')
+        let count = batch.length
+        try {
+          const parsed: unknown = JSON.parse(text)
+          if (
+            parsed &&
+            typeof parsed === 'object' &&
+            Array.isArray((parsed as { data?: unknown }).data)
+          ) {
+            count = (parsed as { data: unknown[] }).data.length
+          }
+        } catch {
+          // Body did not parse as JSON — fall back to batch.length.
+        }
+        report.sent += count
       }
     } catch (e) {
       report.failed += batch.length
