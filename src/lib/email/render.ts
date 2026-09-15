@@ -1,0 +1,233 @@
+// The daily digest, as HTML and as plain text. Pure — everything it needs
+// arrives as an argument, so scripts/preview-digest.ts renders it to a file
+// without a network or a database.
+
+import { bigUsd, num, pct, usd } from '@/lib/format'
+import type { ScoredPick, Selection } from '@/lib/score'
+import { MAX_PICKS, MIN_MARKET_CAP, MIN_SCORE } from '@/lib/score'
+import {
+  bar,
+  chip,
+  escapeHtml,
+  FONT,
+  goldenBand,
+  markerBar,
+  meter,
+  PALETTE,
+  shell,
+} from './primitives'
+
+export interface DigestRecipient {
+  firstName: string
+  unsubscribeToken: string
+}
+
+export interface DigestData {
+  recipient: DigestRecipient
+  selection: Selection
+  /** Already-formatted Eastern date, e.g. "Monday, 14 September 2026". */
+  asOfLabel: string
+  /** Absolute origin for ticker / unsubscribe links, no trailing slash. */
+  siteUrl: string
+}
+
+/** Where the "% vs SMA" marker sits on its track. ±15% maps to the full width,
+ *  so the centre is the SMA itself and the scale matches the factor's domain. */
+function smaMarkerPct(v: number | null): number {
+  if (v == null) return 50
+  return 50 + (Math.max(-15, Math.min(15, v)) / 15) * 50
+}
+
+function logoUrl(symbol: string): string {
+  return `https://assets.parqet.com/logos/symbol/${encodeURIComponent(symbol)}?format=png`
+}
+
+function card(p: ScoredPick, rank: number, siteUrl: string): string {
+  const href = `${siteUrl}/ticker/${encodeURIComponent(p.symbol)}`
+  const reason = p.reasons.length
+    ? `${p.reasons[0].charAt(0).toUpperCase()}${p.reasons[0].slice(1)}${p.reasons.length > 1 ? `, and ${p.reasons.slice(1).join(', ')}` : ''}.`
+    : 'Cleared every entry gate.'
+  return `
+<tr><td style="padding:0 0 14px 0;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:${PALETTE.surface};border:1px solid ${PALETTE.line};border-radius:12px;">
+    <tr>
+      <td style="padding:16px 18px 10px 18px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+          <tr>
+            <td width="34" valign="middle" style="padding:0 10px 0 0;">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="28" style="background:${PALETTE.brand};border-radius:8px;">
+                <tr><td align="center" style="height:28px;font:700 13px ${FONT};color:#ffffff;">${rank}</td></tr>
+              </table>
+            </td>
+            <td width="36" valign="middle" style="padding:0 10px 0 0;">
+              <img src="${logoUrl(p.symbol)}" width="32" height="32" alt="${escapeHtml(p.symbol)}" style="width:32px;height:32px;border-radius:8px;display:block;border:0;">
+            </td>
+            <td valign="middle">
+              <a href="${href}" style="text-decoration:none;">
+                <span style="font:700 17px ${FONT};color:${PALETTE.ink};">${escapeHtml(p.symbol)}</span><br>
+                <span style="font:400 12px ${FONT};color:${PALETTE.muted};">${escapeHtml(p.name ?? '')}</span>
+              </a>
+            </td>
+            <td width="170" valign="middle">${meter({ score: p.score })}</td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+    <tr>
+      <td style="padding:0 18px 10px 18px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+          <tr>
+            <td style="font:400 11px ${FONT};color:${PALETTE.muted};">💰 ${escapeHtml(usd(p.price))}</td>
+            <td align="center" style="font:400 11px ${FONT};color:${PALETTE.muted};">🏦 ${escapeHtml(bigUsd(p.marketCap))}</td>
+            <td align="right" style="font:400 11px ${FONT};color:${PALETTE.muted};">📊 P/E ${escapeHtml(num(p.trailingPe, 1))}</td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+    <tr>
+      <td style="padding:0 18px 4px 18px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+          <tr>
+            ${chip({ label: '📈 YoY EPS', value: pct(p.yoyPct, 0), positive: (p.yoyPct ?? 0) > 0 })}
+            ${chip({ label: '🔮 NTM EPS', value: pct(p.ntmPct, 0), positive: (p.ntmPct ?? 0) > 0 })}
+            ${chip({ label: '🚀 CAGR 5y', value: pct(p.epsCagr5yr, 0), positive: (p.epsCagr5yr ?? 0) > 0 })}
+          </tr>
+        </table>
+      </td>
+    </tr>
+    <tr>
+      <td style="padding:12px 18px 0 18px;">
+        ${markerBar({
+          label: '📉 Price vs 150-day average',
+          value: pct(p.vsSma150Pct),
+          markerPct: smaMarkerPct(p.vsSma150Pct),
+          color: PALETTE.brand,
+          leftCap: '−15%',
+          rightCap: '+15%',
+        })}
+        ${bar({
+          label: '🎯 Tunnel position (lower is better)',
+          value:
+            p.positionPct == null
+              ? 'n/a'
+              : `${Math.max(0, Math.min(100, p.positionPct)).toFixed(0)}% up the channel`,
+          fillPct: p.positionPct == null ? 0 : 100 - Math.max(0, Math.min(100, p.positionPct)),
+          color: PALETTE.positive,
+        })}
+        ${goldenBand({ ratio: p.retracement })}
+        ${bar({
+          label: '🏔️ Room below the all-time high',
+          value: pct(p.pctFromAth),
+          fillPct: p.pctFromAth == null ? 0 : Math.min(100, (Math.abs(p.pctFromAth) / 45) * 100),
+          color: PALETTE.gold,
+        })}
+      </td>
+    </tr>
+    <tr>
+      <td style="padding:2px 18px 16px 18px;font:400 12px ${FONT};color:${PALETTE.body};line-height:1.6;">
+        ${escapeHtml(reason)}
+        <a href="${href}" style="color:${PALETTE.brand};text-decoration:none;font-weight:700;">See the chart →</a>
+      </td>
+    </tr>
+  </table>
+</td></tr>`
+}
+
+function emptyState(selection: Selection): string {
+  return `
+<tr><td style="padding:0 0 14px 0;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:${PALETTE.surface};border:1px solid ${PALETTE.line};border-radius:12px;">
+    <tr><td style="padding:28px 24px;font:400 14px ${FONT};color:${PALETTE.body};line-height:1.7;">
+      <span style="font:700 16px ${FONT};color:${PALETTE.ink};">🫗 Nothing cleared the bar this morning.</span><br><br>
+      Of ${selection.considered} names on the watchlist, none both passed every entry gate
+      (market cap over $${(MIN_MARKET_CAP / 1e9).toFixed(0)}B, positive YoY EPS, positive NTM EPS growth,
+      positive 5-year expected EPS CAGR, trading below its all-time high) and scored at least
+      ${MIN_SCORE}/100.<br><br>
+      We would rather send you a short email than a padded one.
+    </td></tr>
+  </table>
+</td></tr>`
+}
+
+export function renderDigest(data: DigestData): { subject: string; html: string; text: string } {
+  const { picks } = data.selection
+  const n = picks.length
+  const first = data.recipient.firstName
+  const unsubUrl = `${data.siteUrl}/api/subscribe/unsubscribe?token=${encodeURIComponent(data.recipient.unsubscribeToken)}`
+
+  const subject =
+    n === 0
+      ? `TripleQ Daily Maily — no setups cleared the bar today`
+      : `TripleQ Daily Maily — ${first}, ${n} setup${n === 1 ? '' : 's'} scored today (top: ${picks[0].symbol} ${picks[0].score.toFixed(0)}/100)`
+
+  const preheader =
+    n === 0
+      ? `None of ${data.selection.considered} watchlist names cleared the entry gate this morning.`
+      : `${picks.map((p) => p.symbol).join(', ')} — scored before the open.`
+
+  const header = `
+<tr><td style="padding:0 0 18px 0;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:${PALETTE.brandDeep};border-radius:14px;">
+    <tr><td style="padding:22px 24px;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+        <tr>
+          <td width="40" valign="middle" style="padding:0 12px 0 0;">
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="36" style="background:${PALETTE.brand};border-radius:10px;">
+              <tr><td align="center" style="height:36px;font:700 18px ${FONT};color:#ffffff;">Q</td></tr>
+            </table>
+          </td>
+          <td valign="middle">
+            <span style="font:700 19px ${FONT};color:#ffffff;">TripleQ Daily Maily</span><br>
+            <span style="font:400 12px ${FONT};color:#c7d2fe;">${escapeHtml(data.asOfLabel)} · scored before the open</span>
+          </td>
+        </tr>
+      </table>
+    </td></tr>
+  </table>
+</td></tr>
+<tr><td style="padding:0 2px 16px 2px;font:400 14px ${FONT};color:${PALETTE.body};line-height:1.7;">
+  <span style="font:700 16px ${FONT};color:${PALETTE.ink};">☀️ Good morning, ${escapeHtml(first)}.</span><br>
+  ${
+    n === 0
+      ? `None of ${data.selection.considered} watchlist names cleared this morning's entry gate.`
+      : `${n} of ${data.selection.considered} watchlist names cleared the entry gate and scored ${MIN_SCORE} or better${data.selection.gated > 0 ? `; ${data.selection.gated} more passed the gate but fell short on score` : ''}. Ranked best first, ${MAX_PICKS} maximum.`
+  }
+</td></tr>`
+
+  const body =
+    header + (n === 0 ? emptyState(data.selection) : picks.map((p, i) => card(p, i + 1, data.siteUrl)).join(''))
+
+  const footerLinks = `You are receiving this because you confirmed your subscription at ${escapeHtml(data.siteUrl)}.<br>
+<a href="${unsubUrl}" style="color:${PALETTE.muted};">Unsubscribe</a>`
+
+  const text = [
+    `TripleQ Daily Maily — ${data.asOfLabel}`,
+    ``,
+    `Good morning, ${first}.`,
+    ``,
+    n === 0
+      ? `None of ${data.selection.considered} watchlist names cleared this morning's entry gate.`
+      : picks
+          .map(
+            (p, i) =>
+              `${i + 1}. ${p.symbol} (${p.name ?? ''}) — ${p.score.toFixed(1)}/100\n` +
+              `   Price ${usd(p.price)} · Market cap ${bigUsd(p.marketCap)} · P/E ${num(p.trailingPe, 1)}\n` +
+              `   YoY EPS ${pct(p.yoyPct, 0)} · NTM ${pct(p.ntmPct, 0)} · CAGR 5y ${pct(p.epsCagr5yr, 0)}\n` +
+              `   vs 150-day avg ${pct(p.vsSma150Pct)} · ${p.pctFromAth == null ? '' : `${pct(p.pctFromAth)} from the high`}\n` +
+              `   ${p.reasons.join('; ')}\n` +
+              `   ${data.siteUrl}/ticker/${p.symbol}`,
+          )
+          .join('\n\n'),
+    ``,
+    `Fundamental signals only — not investment advice.`,
+    `Unsubscribe: ${unsubUrl}`,
+    ``,
+    `TripleQ Group`,
+  ].join('\n')
+
+  return {
+    subject,
+    html: shell({ title: subject, preheader, bodyHtml: body, footerLinksHtml: footerLinks }),
+    text,
+  }
+}

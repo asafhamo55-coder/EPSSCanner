@@ -31,3 +31,6 @@ next-env.d.ts.bak
 
 # vercel
 .vercel
+
+# email preview output
+/.preview/
