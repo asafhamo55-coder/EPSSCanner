@@ -52,7 +52,7 @@ No RLS/auth/storage setup needed.
 | `CRON_SECRET` | **required.** Random string; protects `/api/ingest` and `/api/digest`. `/api/digest` fails closed (401) with no key set — without this, the digest endpoint is disabled |
 | `RESEND_API_KEY` | Resend API key. Unset = the send layer no-ops and logs instead of mailing anyone |
 | `DIGEST_FROM` | Sender identity, e.g. `TripleQ Group <daily@tripleqgroup.com>`. Requires the domain verified in Resend |
-| `NEXT_PUBLIC_SITE_URL` | Absolute origin for links inside emails, e.g. `https://tripleqgroup.vercel.app`. No trailing slash |
+| `NEXT_PUBLIC_SITE_URL` | Absolute origin for links inside emails, e.g. `https://tripleqgroup.com`. No trailing slash — should share a domain with `DIGEST_FROM` in production (mismatched sender/footer domains read as untrustworthy and hurt deliverability) |
 | `DIGEST_TEST_EMAIL` | Sole recipient of `GET /api/digest?force=1`, for verifying a real send |
 
 Deploy. The app is live.

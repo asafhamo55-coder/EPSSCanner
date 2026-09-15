@@ -241,10 +241,19 @@ export async function subscribeAction(input: {
         // otherwise invisible — nothing arrives and nothing says why. Log the
         // outcome, not the address: this is the same PII-in-logs concern as
         // sendEmails' own no-key branch.
+        //
+        // Distinguish "no RESEND_API_KEY configured" (expected on every local/
+        // dev signup, and on a mock deploy — not a bug) from an actual send
+        // failure against a real key, so this line doesn't cry wolf on every
+        // dev-mode signup and mask the runs that matter.
         if (report.failed > 0 || report.errors.length > 0) {
-          console.error(
-            `[subscribe] confirmation send failed (${report.failed} failed): ${report.errors.join('; ')}`,
-          )
+          if (!process.env.RESEND_API_KEY) {
+            console.warn('[subscribe] confirmation email not sent — RESEND_API_KEY is not configured.')
+          } else {
+            console.error(
+              `[subscribe] confirmation send failed (${report.failed} failed): ${report.errors.join('; ')}`,
+            )
+          }
         }
       })
     }

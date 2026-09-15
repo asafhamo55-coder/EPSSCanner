@@ -49,9 +49,14 @@ function smaMarkerPct(v: number | null): number {
 /** Colour a YoY/NTM chip from the underlying SignalState, not from the sign
  *  of the percentage — signals.ts sets 'pass' only at ≥20% YoY (≥15% NTM),
  *  and a 'flag' name (soft-positive, 0–20%/0–15%) must read amber here the
- *  same way SignalChip.tsx reads it amber on the dashboard, not green. */
+ *  same way SignalChip.tsx reads it amber on the dashboard, not green.
+ *  'turnaround' (a genuine loss→profit sign change, with no defined growth
+ *  %) is info/blue here too, matching SignalChip.tsx's 'info' tone — not
+ *  green, which would repeat the same email-vs-app mismatch for a rarer
+ *  state. */
 function chipTone(state: SignalState): ChipTone {
-  if (state === 'pass' || state === 'turnaround') return 'positive'
+  if (state === 'pass') return 'positive'
+  if (state === 'turnaround') return 'info'
   if (state === 'flag') return 'warning'
   return 'negative' // 'fail' | 'na'
 }

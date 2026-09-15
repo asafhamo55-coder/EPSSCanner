@@ -97,26 +97,43 @@ export async function sendEmails(messages: EmailMessage[]): Promise<SendReport> 
         // HTTP 200 does not mean every message in the batch actually sent —
         // Resend's batch endpoint returns {"data":[{"id":...},...]}, one entry
         // per message that went out. Count that array when the body parses as
-        // one; only fall back to assuming the whole batch succeeded when the
-        // body is missing or not the shape we expect, so a malformed-but-200
-        // response can't quietly overcount `sent` (this is the same class of
-        // bug as an unset API key: `report.failed` is the route's only alarm,
-        // so overcounting `sent` is silent data loss, not an accounting nit).
+        // one, and treat a shortfall (data.length < batch.length) as partial
+        // failures — `report.failed` is the route's only alarm, so silently
+        // counting a partial batch as fully sent would be the exact class of
+        // silent-data-loss bug this whole comment is about. Only fall back to
+        // assuming the whole batch succeeded when the body is UNPARSEABLE —
+        // and even then, push a warning into `errors` so the alarm still
+        // fires rather than the count just quietly lying.
         const text = await res.text().catch(() => '')
-        let count = batch.length
+        let parsed: unknown
+        let dataLen: number | null = null
         try {
-          const parsed: unknown = JSON.parse(text)
-          if (
-            parsed &&
-            typeof parsed === 'object' &&
-            Array.isArray((parsed as { data?: unknown }).data)
-          ) {
-            count = (parsed as { data: unknown[] }).data.length
+          parsed = JSON.parse(text)
+          if (parsed && typeof parsed === 'object' && Array.isArray((parsed as { data?: unknown }).data)) {
+            dataLen = (parsed as { data: unknown[] }).data.length
           }
         } catch {
-          // Body did not parse as JSON — fall back to batch.length.
+          parsed = undefined
         }
-        report.sent += count
+        if (dataLen != null) {
+          report.sent += dataLen
+          if (dataLen < batch.length) {
+            const shortfall = batch.length - dataLen
+            report.failed += shortfall
+            report.errors.push(
+              `batch ${i + 1}: HTTP 200 but data.length (${dataLen}) < batch size (${batch.length}) — ${shortfall} message(s) presumed unsent`,
+            )
+          }
+        } else {
+          // Body didn't parse as JSON, or parsed but had no `data` array —
+          // either way the shape isn't the one we know how to trust, so this
+          // is treated as unparseable: fall back to assuming the batch sent,
+          // but flag it so it isn't a silent assumption.
+          report.sent += batch.length
+          report.errors.push(
+            `batch ${i + 1}: HTTP 200 with an unparseable/unexpected body — assumed all ${batch.length} sent`,
+          )
+        }
       }
     } catch (e) {
       report.failed += batch.length

@@ -38,7 +38,13 @@ const GOLDEN_ZONE_HIGH = GOLDEN_FULL_CREDIT[GOLDEN_FULL_CREDIT.length - 1]
  *  colours and carry no relation to a signal's pass/flag/fail state.
  *  warningInk on warningSoft measures 6.37:1, comfortably clearing WCAG AA's
  *  4.5:1 for small text (computed via the standard relative-luminance
- *  formula: amber-800 #92400e on amber-100 #fef3c7). */
+ *  formula: amber-800 #92400e on amber-100 #fef3c7).
+ *
+ *  `infoSoft` / `infoInk` are the pair for SignalState 'turnaround' — a
+ *  loss→profit sign change signals.ts genuinely emits, which SignalChip.tsx
+ *  (the dashboard) colours info/blue, not green. infoInk on infoSoft
+ *  measures 6.59:1 (sky-800 #075985 on sky-100 #e0f2fe), clearing WCAG AA's
+ *  4.5:1 the same way the amber pair does. */
 export const PALETTE = {
   ink: '#0f172a',
   body: '#334155',
@@ -59,6 +65,8 @@ export const PALETTE = {
   goldInk: '#b45309',       // amber-700 — 5.0:1 on white
   warningSoft: '#fef3c7',   // amber-100
   warningInk: '#92400e',    // amber-800 — 6.37:1 on warningSoft
+  infoSoft: '#e0f2fe',      // sky-100
+  infoInk: '#075985',       // sky-800 — 6.59:1 on infoSoft
   track: '#e2e8f0',
 } as const
 
@@ -200,16 +208,19 @@ export function goldenBand(opts: { ratio: number | null }): string {
 </table>`
 }
 
-/** A small pill for a green/amber/red reading. `tone` should track the
+/** A small pill for a green/amber/blue/red reading. `tone` should track the
  *  underlying SignalState where one exists (see render.ts's chipTone) —
  *  callers with no signal state of their own (e.g. the CAGR chip) fall back
- *  to the sign of the value. */
-export type ChipTone = 'positive' | 'warning' | 'negative'
+ *  to the sign of the value. `info` exists only for the 'turnaround' signal
+ *  state (a loss→profit sign change) — SignalChip.tsx colours it info/blue
+ *  on the dashboard, not green, so the email must match. */
+export type ChipTone = 'positive' | 'warning' | 'negative' | 'info'
 
 const CHIP_COLORS: Record<ChipTone, { bg: string; fg: string }> = {
   positive: { bg: PALETTE.positiveSoft, fg: PALETTE.positiveInk },
   warning: { bg: PALETTE.warningSoft, fg: PALETTE.warningInk },
   negative: { bg: PALETTE.negativeSoft, fg: PALETTE.negativeInk },
+  info: { bg: PALETTE.infoSoft, fg: PALETTE.infoInk },
 }
 
 export function chip(opts: { label: string; value: string; tone: ChipTone }): string {

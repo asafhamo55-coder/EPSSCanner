@@ -13,6 +13,13 @@ import { liveTechnicals } from '@/lib/queries'
 // Optional shared-secret gate via CRON_SECRET. Vercel Cron automatically
 // sends `Authorization: Bearer <CRON_SECRET>` when that env var is set, so the
 // daily GET passes the same check.
+//
+// Deliberately OPTIONAL here, unlike /api/digest's identically-named
+// authorized(), which fails CLOSED (401) when CRON_SECRET is unset. This
+// route spends no money and sends no mail — an unauthenticated ingest just
+// re-pulls public fundamentals — so it can stay open. /api/digest cannot:
+// an open digest endpoint is an open "mail the whole list" button that also
+// leaks the subscriber count in its JSON response.
 function authorized(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET
   if (!secret) return true

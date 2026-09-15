@@ -1,6 +1,15 @@
 import { Suspense } from 'react'
-import { Mail } from 'lucide-react'
-import { Alert, Card, CardContent, CardDescription, CardHeader, CardTitle, PageHeader } from '@/ui'
+import { CloudOff, Mail } from 'lucide-react'
+import {
+  Alert,
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  EmptyState,
+  PageHeader,
+} from '@/ui'
 import { getCachedSelection } from '@/lib/digest'
 import { MAX_PICKS, MIN_MARKET_CAP, MIN_SCORE } from '@/lib/score'
 import { SubscribeForm } from '@/components/SubscribeForm'
@@ -17,8 +26,30 @@ import { WatchlistSkeleton } from '@/components/DashboardSkeletons'
 // still shared across requests.
 
 async function TodaysPicks() {
-  const selection = await getCachedSelection()
-  return <DigestPreview selection={selection} />
+  // buildSelection() (via getCachedSelection) deliberately THROWS on an
+  // empty/unreadable watchlist — that's for /api/digest's benefit, whose
+  // releaseDigestDay path needs the throw to retry instead of recording a
+  // false "sent". This page has no such retry mechanism and no error.tsx
+  // boundary of its own, so letting the throw propagate would 500 the
+  // entire public page — subscribe form included — on the exact conditions
+  // (an empty or not-yet-seeded watchlist, a transient Supabase blip) that
+  // getWatchlist()'s own EmptyState-tolerant design says should degrade
+  // instead. Catch here and render an honest "temporarily unavailable"
+  // state — NOT DigestPreview's "nothing qualified today" EmptyState, which
+  // would be exactly the misleading claim C3 was written to prevent.
+  try {
+    const selection = await getCachedSelection()
+    return <DigestPreview selection={selection} />
+  } catch (e) {
+    console.error('[daily] could not build today\'s picks:', e)
+    return (
+      <EmptyState
+        icon={<CloudOff className="h-8 w-8" />}
+        title="Today's picks are temporarily unavailable"
+        description="We couldn't score the watchlist just now — try again shortly. Your subscription (and today's 6 AM send) isn't affected."
+      />
+    )
+  }
 }
 
 export default async function DailyPage({
