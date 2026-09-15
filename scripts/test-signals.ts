@@ -40,8 +40,17 @@ import {
   retracementRatio,
 } from '../src/lib/technicals'
 import type { Bar } from '../src/market-data/provider'
-import type { Fib } from '../src/lib/technicals'
+import type { Fib, Technicals } from '../src/lib/technicals'
 import { epsCagr5yr, pctFromAth, vsSma150Pct } from '../src/lib/derive'
+import {
+  evaluate,
+  selectPicks,
+  MAX_PICKS,
+  MIN_MARKET_CAP,
+  MIN_SCORE,
+  WEIGHTS,
+  type ScoreInput,
+} from '../src/lib/score'
 
 let failures = 0
 
@@ -465,6 +474,220 @@ async function main() {
   approx(vsSma150Pct(90, 100), -10, 1e-9, 'vsSma150Pct: 10% below the SMA')
   eq(vsSma150Pct(110, 0), null, 'vsSma150Pct: SMA of 0 returns null')
   eq(vsSma150Pct(110, null), null, 'vsSma150Pct: missing SMA returns null')
+
+  // ── TripleQ Score ────────────────────────────────────────────────
+  console.log('\nTripleQ Score — gates')
+
+  // A synthetic Technicals with dials for every technical factor. Only the
+  // fields the scorer reads are populated; the rest are inert.
+  function mkTech(positionPct: number, close: number, fib: Fib | null): Technicals {
+    return {
+      visible: [{ t: 0, o: close, h: close, l: close, c: close }],
+      sma150: [null],
+      channel: { upper: [], mid: [], lower: [], slopePerDay: 0, positionPct },
+      fib,
+      gaps: [],
+      verdict: 'fair',
+      positionPct,
+      signals: null,
+      windowBars: 126,
+    }
+  }
+
+  // A ticker that passes every gate and scores near the top: mega cap, all
+  // three growth readings green, price below the ATH, sitting on its SMA, at
+  // the bottom of the channel, inside the golden zone, 15% off the high.
+  const perfect: ScoreInput = {
+    symbol: 'AAA',
+    name: 'Alpha',
+    price: 100,
+    marketCap: 1e12,
+    trailingPe: 30,
+    sma150: 100,
+    // -25% from the high is the drawdown curve's full-credit point. Getting
+    // this wrong is why the "scores 100" assertion below is worth having.
+    allTimeHigh: 400 / 3, // 100 / 0.75 → pctFromAth = -25%
+    yoyPct: 40,
+    yoyState: 'pass',
+    ntmPct: 40,
+    ntmState: 'pass',
+    epsCagr5yr: 40,
+    technicals: mkTech(0, 100, { high: 200, low: 0, direction: 'rally', anchor: 'swing', levels: [] }),
+  }
+
+  const perfectEval = evaluate(perfect)
+  eq(perfectEval.passedGates, true, 'gates: the perfect input passes all five')
+  eq(perfectEval.gates.length, 5, 'gates: five gates are reported')
+  approx(perfectEval.score, 100, 0.05, 'score: the perfect input scores 100')
+
+  // Each gate must reject on its own.
+  eq(
+    evaluate({ ...perfect, marketCap: MIN_MARKET_CAP - 1 }).passedGates,
+    false,
+    'gate 1: market cap below $500B is rejected',
+  )
+  eq(
+    evaluate({ ...perfect, marketCap: MIN_MARKET_CAP }).passedGates,
+    true,
+    'gate 1: exactly $500B passes (inclusive)',
+  )
+  eq(evaluate({ ...perfect, marketCap: null }).passedGates, false, 'gate 1: unknown market cap is rejected')
+  eq(evaluate({ ...perfect, yoyPct: -1 }).passedGates, false, 'gate 2: negative YoY EPS is rejected')
+  eq(
+    evaluate({ ...perfect, yoyPct: null, yoyState: 'turnaround' }).passedGates,
+    false,
+    'gate 2: a turnaround has no growth rate, so it is rejected',
+  )
+  eq(evaluate({ ...perfect, ntmPct: 0 }).passedGates, false, 'gate 3: zero NTM growth is rejected')
+  eq(evaluate({ ...perfect, ntmState: 'na' }).passedGates, false, 'gate 3: an n/a NTM reading is rejected')
+  eq(evaluate({ ...perfect, epsCagr5yr: -5 }).passedGates, false, 'gate 4: negative EPS CAGR is rejected')
+  eq(evaluate({ ...perfect, epsCagr5yr: null }).passedGates, false, 'gate 4: unknown EPS CAGR is rejected')
+  eq(
+    evaluate({ ...perfect, price: 400 / 3 }).passedGates,
+    false,
+    'gate 5: price at the all-time high is rejected',
+  )
+  eq(
+    evaluate({ ...perfect, price: 150 }).passedGates,
+    false,
+    'gate 5: price above the all-time high is rejected',
+  )
+  eq(evaluate({ ...perfect, allTimeHigh: null }).passedGates, false, 'gate 5: unknown ATH is rejected')
+
+  console.log('\nTripleQ Score — factors')
+  const pointsOf = (e: ReturnType<typeof evaluate>, key: string) =>
+    e.factors.find((f) => f.key === key)?.points ?? -1
+
+  // Growth: 10 points per metric, full credit at +30%, linear below, capped above.
+  approx(pointsOf(perfectEval, 'growth'), WEIGHTS.growth, 1e-6, 'growth: +40% on all three earns the full 30')
+  approx(
+    pointsOf(evaluate({ ...perfect, yoyPct: 15, ntmPct: 15, epsCagr5yr: 15 }), 'growth'),
+    WEIGHTS.growth / 2,
+    1e-6,
+    'growth: +15% on all three is half credit',
+  )
+
+  // SMA proximity: peaks on the SMA, zero at ±15%.
+  approx(pointsOf(perfectEval, 'sma'), WEIGHTS.sma, 1e-6, 'sma: price on the SMA earns the full 20')
+  approx(
+    pointsOf(evaluate({ ...perfect, sma150: 100 / 1.075 }), 'sma'),
+    WEIGHTS.sma / 2,
+    0.01,
+    'sma: 7.5% above the SMA is half credit',
+  )
+  approx(
+    pointsOf(evaluate({ ...perfect, sma150: 100 / 1.3 }), 'sma'),
+    0,
+    1e-6,
+    'sma: 30% above the SMA earns nothing (clamped, never negative)',
+  )
+  approx(
+    pointsOf(evaluate({ ...perfect, sma150: null }), 'sma'),
+    0,
+    1e-6,
+    'sma: a missing SMA scores zero, not a free pass',
+  )
+
+  // Tunnel: bottom of the channel is full credit, top is zero, clamped outside.
+  approx(pointsOf(perfectEval, 'tunnel'), WEIGHTS.tunnel, 1e-6, 'tunnel: channel floor earns the full 20')
+  approx(
+    pointsOf(evaluate({ ...perfect, technicals: mkTech(50, 100, perfect.technicals!.fib) }), 'tunnel'),
+    WEIGHTS.tunnel / 2,
+    1e-6,
+    'tunnel: mid-channel is half credit',
+  )
+  approx(
+    pointsOf(evaluate({ ...perfect, technicals: mkTech(130, 100, perfect.technicals!.fib) }), 'tunnel'),
+    0,
+    1e-6,
+    'tunnel: above the upper rail clamps to zero, never negative',
+  )
+  approx(
+    pointsOf(evaluate({ ...perfect, technicals: null }), 'tunnel'),
+    0,
+    1e-6,
+    'tunnel: absent technicals score zero',
+  )
+
+  // Golden zone: full inside 0.5–0.618, tapering to zero at 0.236 / 0.786.
+  const goldenAt = (ratio: number) => {
+    // rally fib high 200 low 0 → close = 200 - 200*ratio
+    const close = 200 - 200 * ratio
+    return pointsOf(
+      evaluate({
+        ...perfect,
+        technicals: mkTech(0, close, { high: 200, low: 0, direction: 'rally', anchor: 'swing', levels: [] }),
+      }),
+      'golden',
+    )
+  }
+  approx(goldenAt(0.55), WEIGHTS.golden, 1e-6, 'golden: 0.55 retracement is full credit')
+  approx(goldenAt(0.5), WEIGHTS.golden, 1e-6, 'golden: the 0.5 edge is full credit')
+  approx(goldenAt(0.618), WEIGHTS.golden, 1e-6, 'golden: the 0.618 edge is full credit')
+  approx(goldenAt(0.368), WEIGHTS.golden / 2, 0.01, 'golden: halfway from 0.236 to 0.5 is half credit')
+  approx(goldenAt(0.236), 0, 1e-6, 'golden: the 0.236 knot is zero')
+  approx(goldenAt(0.1), 0, 1e-6, 'golden: shallower than 0.236 is zero')
+  approx(goldenAt(0.9), 0, 1e-6, 'golden: deeper than 0.786 is zero')
+
+  // Drawdown: rewards a real pullback, not a broken trend.
+  const ddAt = (dd: number) =>
+    pointsOf(evaluate({ ...perfect, price: 100, allTimeHigh: 100 / (1 - dd / 100) }), 'drawdown')
+  approx(ddAt(25), WEIGHTS.drawdown, 0.01, 'drawdown: -25% is full credit')
+  approx(ddAt(30), WEIGHTS.drawdown, 0.01, 'drawdown: -30% still full credit (plateau)')
+  approx(ddAt(8), WEIGHTS.drawdown * 0.4, 0.01, 'drawdown: -8% is 40% credit')
+  approx(ddAt(45), 0, 0.01, 'drawdown: -45% is a broken trend, zero credit')
+  approx(ddAt(60), 0, 0.01, 'drawdown: beyond -45% stays zero')
+
+  console.log('\nTripleQ Score — selection')
+  const mk = (symbol: string, over: Partial<ScoreInput>): ScoreInput => ({ ...perfect, symbol, ...over })
+
+  // A weak-but-passing name: all gates green, but every technical factor at
+  // its worst, so the score lands under the 50 cutoff.
+  const weak = mk('WEAK', {
+    yoyPct: 1,
+    ntmPct: 1,
+    epsCagr5yr: 1,
+    sma150: 100 / 1.3,
+    allTimeHigh: 100 / (1 - 0.6),
+    technicals: mkTech(100, 100, { high: 200, low: 0, direction: 'rally', anchor: 'swing', levels: [] }),
+  })
+  eq(evaluate(weak).passedGates, true, 'selection: the weak name passes every gate')
+  eq(evaluate(weak).score < MIN_SCORE, true, 'selection: the weak name scores under the cutoff')
+
+  const sel = selectPicks([weak, mk('BBB', {}), mk('CCC', { marketCap: 1 })])
+  eq(sel.picks.length, 1, 'selection: only the qualifying, above-cutoff name is picked')
+  eq(sel.picks[0].symbol, 'BBB', 'selection: the picked name is the one that qualified')
+  eq(sel.considered, 3, 'selection: reports how many were considered')
+  eq(sel.gated, 1, 'selection: reports how many cleared the gates but missed the cutoff')
+
+  // Ordering and the cap.
+  const many = Array.from({ length: 14 }, (_, i) =>
+    mk(`T${String(i).padStart(2, '0')}`, { yoyPct: 30 - i, ntmPct: 30 - i, epsCagr5yr: 30 - i }),
+  )
+  const capped = selectPicks(many)
+  eq(capped.picks.length, MAX_PICKS, 'selection: never returns more than MAX_PICKS')
+  eq(capped.picks[0].symbol, 'T00', 'selection: the highest score ranks first')
+  eq(
+    capped.picks.every((p, i, a) => i === 0 || a[i - 1].score >= p.score),
+    true,
+    'selection: picks are ordered by score descending',
+  )
+
+  // Ties break on symbol so two runs of the same data produce the same email.
+  const tied = selectPicks([mk('ZZZ', {}), mk('AAB', {})])
+  eq(tied.picks[0].symbol, 'AAB', 'selection: equal scores tie-break on symbol ascending')
+
+  eq(selectPicks([]).picks.length, 0, 'selection: an empty watchlist yields no picks')
+  eq(
+    selectPicks([mk('DDD', { marketCap: 1 })]).picks.length,
+    0,
+    'selection: a list where nothing qualifies yields no picks',
+  )
+  eq(
+    evaluate(perfect).reasons.length > 0,
+    true,
+    'reasons: a high-scoring pick explains itself',
+  )
 
   // ── Result ───────────────────────────────────────────────────────
   console.log('')
