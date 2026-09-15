@@ -1,6 +1,6 @@
-import { revalidatePath, revalidateTag } from 'next/cache'
 import { NextResponse, type NextRequest } from 'next/server'
 import { ingestAllActive, ingestTicker } from '@/lib/ingest'
+import { publish } from '@/lib/publish'
 import { liveTechnicals } from '@/lib/queries'
 
 // Ingest endpoint — same idempotent path used by the UI server actions.
@@ -21,15 +21,6 @@ function authorized(req: NextRequest): boolean {
 
 // Cron runs can exceed the default serverless window on a big watchlist.
 export const maxDuration = 60
-
-// The dashboard is served from the CDN (ISR), so a fresh ingest is invisible
-// until its cache is dropped. Publish the new numbers as soon as they land
-// rather than waiting out the page's revalidate window.
-function publish(symbol?: string) {
-  revalidateTag('yahoo-live')
-  revalidatePath('/')
-  if (symbol) revalidatePath(`/ticker/${symbol}`)
-}
 
 /** Chart data is cached lazily, so before this ran the first person to open a
  *  chart after the TTL lapsed paid the Yahoo round-trip — the same cold path
