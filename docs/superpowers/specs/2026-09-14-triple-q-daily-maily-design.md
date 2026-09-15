@@ -176,7 +176,7 @@ digest builds.
 
 ### `GET /api/digest`
 
-Guarded by `CRON_SECRET` exactly like `/api/ingest`. `maxDuration = 60`.
+Guarded by `CRON_SECRET`, but NOT "exactly like" `/api/ingest` — a later whole-branch review found the two must diverge: `/api/ingest` still treats `CRON_SECRET` as optional (it spends no money and sends no mail, so it's fine left open), while `/api/digest` fails CLOSED (401) when `CRON_SECRET` is unset, because an open digest endpoint is an open "mail the whole list" button that also leaks the subscriber count. `maxDuration = 60`.
 
 1. **Hour guard.** Read the current hour in `America/New_York` via
    `Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false })`.
@@ -364,7 +364,7 @@ package.json                 + preview:digest script
 | `DIGEST_FROM` | Defaults to `TripleQ Group <daily@tripleqgroup.com>`. |
 | `NEXT_PUBLIC_SITE_URL` | Absolute base for confirm/unsubscribe/ticker links in email. |
 | `DIGEST_TEST_EMAIL` | Sole recipient when `/api/digest?force=1` is used. |
-| `CRON_SECRET` | Already exists; now also guards `/api/digest`. |
+| `CRON_SECRET` | Already exists; now also guards `/api/digest` — but required there (401 if unset), unlike `/api/ingest` where it stays optional. |
 
 Manual setup outside the codebase: verify `tripleqgroup.com` in Resend (DNS
 records), and set the four new vars in Vercel.

@@ -1,6 +1,6 @@
-import { revalidatePath, revalidateTag } from 'next/cache'
 import { NextResponse, type NextRequest } from 'next/server'
 import { ingestAllActive, ingestTicker } from '@/lib/ingest'
+import { publish } from '@/lib/publish'
 import { liveTechnicals } from '@/lib/queries'
 
 // Ingest endpoint — same idempotent path used by the UI server actions.
@@ -13,6 +13,13 @@ import { liveTechnicals } from '@/lib/queries'
 // Optional shared-secret gate via CRON_SECRET. Vercel Cron automatically
 // sends `Authorization: Bearer <CRON_SECRET>` when that env var is set, so the
 // daily GET passes the same check.
+//
+// Deliberately OPTIONAL here, unlike /api/digest's identically-named
+// authorized(), which fails CLOSED (401) when CRON_SECRET is unset. This
+// route spends no money and sends no mail — an unauthenticated ingest just
+// re-pulls public fundamentals — so it can stay open. /api/digest cannot:
+// an open digest endpoint is an open "mail the whole list" button that also
+// leaks the subscriber count in its JSON response.
 function authorized(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET
   if (!secret) return true
@@ -21,15 +28,6 @@ function authorized(req: NextRequest): boolean {
 
 // Cron runs can exceed the default serverless window on a big watchlist.
 export const maxDuration = 60
-
-// The dashboard is served from the CDN (ISR), so a fresh ingest is invisible
-// until its cache is dropped. Publish the new numbers as soon as they land
-// rather than waiting out the page's revalidate window.
-function publish(symbol?: string) {
-  revalidateTag('yahoo-live')
-  revalidatePath('/')
-  if (symbol) revalidatePath(`/ticker/${symbol}`)
-}
 
 /** Chart data is cached lazily, so before this ran the first person to open a
  *  chart after the TTL lapsed paid the Yahoo round-trip — the same cold path

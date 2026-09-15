@@ -1,10 +1,16 @@
 'use server'
 
 import { revalidatePath, revalidateTag } from 'next/cache'
+import { after } from 'next/server'
+import { z } from 'zod'
 import { db } from '@/lib/db'
+import { renderConfirm } from '@/lib/email/confirm'
+import { sendEmails } from '@/lib/email/send'
 import { ingestAllActive, ingestTicker } from '@/lib/ingest'
 import { getProvider } from '@/market-data'
 import { liveTechnicals } from '@/lib/queries'
+import { siteUrl } from '@/lib/site'
+import { upsertSubscriber } from '@/lib/subscribers'
 import type { Technicals } from '@/lib/technicals'
 
 export interface ActionResult {
@@ -168,5 +174,97 @@ export async function getTechnicals(symbol: string): Promise<Technicals | null> 
     ])
   } finally {
     if (timer) clearTimeout(timer)
+  }
+}
+
+// firstName/lastName are interpolated into the confirmation email's subject
+// and body (see renderConfirm). Length is bounded below, but a name is
+// otherwise free text from a public form — reject control characters (CR/LF
+// included) so nothing can inject a header/line break into anything built
+// from these values.
+const NO_CONTROL_CHARS = /^[^\x00-\x1F\x7F]*$/
+const CONTROL_CHAR_MSG = 'Remove line breaks or control characters.'
+
+const SubscribeInput = z.object({
+  firstName: z
+    .string()
+    .trim()
+    .min(1, 'Enter your first name.')
+    .max(60)
+    .regex(NO_CONTROL_CHARS, CONTROL_CHAR_MSG),
+  lastName: z
+    .string()
+    .trim()
+    .min(1, 'Enter your last name.')
+    .max(60)
+    .regex(NO_CONTROL_CHARS, CONTROL_CHAR_MSG),
+  email: z.string().trim().toLowerCase().email('Enter a valid email address.').max(254),
+})
+
+/** Register for the daily digest. Double opt-in: this only ever creates a
+ *  pending row and mails a confirmation link — nothing is added to the send
+ *  list until that link is clicked.
+ *
+ *  The success message is identical whether the address was new or already
+ *  confirmed. Differentiating them would turn this public form into an oracle
+ *  that reports whether a given address is on the list. */
+export async function subscribeAction(input: {
+  firstName: string
+  lastName: string
+  email: string
+}): Promise<ActionResult> {
+  const parsed = SubscribeInput.safeParse(input)
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? 'Check the form and try again.' }
+  }
+  try {
+    const { outcome, subscriber } = await upsertSubscriber(parsed.data)
+    if (outcome !== 'already-confirmed' && subscriber.confirmToken) {
+      // Links to the /daily/confirm interstitial page, not the API route
+      // directly — a GET there only renders a "click to confirm" button and
+      // never mutates, so a mail gateway's link scanner cannot auto-confirm
+      // this signup on the recipient's behalf.
+      const confirmUrl = `${siteUrl()}/daily/confirm?token=${encodeURIComponent(subscriber.confirmToken)}`
+      const mail = renderConfirm({ firstName: subscriber.firstName, confirmUrl })
+      // Dispatched AFTER the response is sent, for two reasons. The response
+      // time no longer depends on which branch ran, so it cannot be timed to
+      // reveal whether an address is already subscribed — the identical
+      // success copy above would otherwise be undone by a measurable delay.
+      // And the form stops waiting on a third-party HTTP round-trip it does
+      // not need to block on.
+      after(async () => {
+        const report = await sendEmails([
+          { to: subscriber.email, subject: mail.subject, html: mail.html, text: mail.text },
+        ])
+        // The response already told the browser "check your inbox" before this
+        // runs (that's the point of `after()`), so a failed send here is
+        // otherwise invisible — nothing arrives and nothing says why. Log the
+        // outcome, not the address: this is the same PII-in-logs concern as
+        // sendEmails' own no-key branch.
+        //
+        // Distinguish "no RESEND_API_KEY configured" (expected on every local/
+        // dev signup, and on a mock deploy — not a bug) from an actual send
+        // failure against a real key, so this line doesn't cry wolf on every
+        // dev-mode signup and mask the runs that matter.
+        if (report.failed > 0 || report.errors.length > 0) {
+          if (!process.env.RESEND_API_KEY) {
+            console.warn('[subscribe] confirmation email not sent — RESEND_API_KEY is not configured.')
+          } else {
+            console.error(
+              `[subscribe] confirmation send failed (${report.failed} failed): ${report.errors.join('; ')}`,
+            )
+          }
+        }
+      })
+    }
+    return { ok: true, message: 'Check your inbox — confirm the link and your first digest arrives at 6 AM ET.' }
+  } catch (e) {
+    // Never return the raw DB error to the browser: a unique-violation race
+    // between two concurrent signups for the same address must not leak
+    // through and give this public form a way to distinguish "already
+    // subscribed" from "new" by error text, undermining the identical success
+    // copy above. Log the detail server-side instead.
+    console.error('[subscribe] failed:', e)
+    return { ok: false, error: 'Something went wrong — try again in a moment.' }
   }
 }

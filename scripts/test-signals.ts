@@ -37,8 +37,23 @@ import {
   smaSeries,
   verdictFrom,
   inGoldenZone,
+  retracementRatio,
 } from '../src/lib/technicals'
 import type { Bar } from '../src/market-data/provider'
+import type { Fib, Technicals } from '../src/lib/technicals'
+import { epsCagr5yr, pctFromAth, vsSma150Pct } from '../src/lib/derive'
+import { renderConfirm } from '../src/lib/email/confirm'
+import { renderDigest } from '../src/lib/email/render'
+import {
+  evaluate,
+  selectPicks,
+  toPick,
+  MAX_PICKS,
+  MIN_MARKET_CAP,
+  MIN_SCORE,
+  WEIGHTS,
+  type ScoreInput,
+} from '../src/lib/score'
 
 let failures = 0
 
@@ -402,6 +417,378 @@ async function main() {
   const singleTech = analyze([{ t: 0, o: 1, h: 1, l: 1, c: 1 }])
   eq(singleTech.verdict, 'insufficient-history', 'analyze single bar: verdict is insufficient-history')
   eq(singleTech.sma150[0], null, 'analyze single bar: sma150 null (warmup not satisfied)')
+
+  // ── Technicals: retracementRatio ─────────────────────────────────
+  console.log('\nTechnicals — retracementRatio')
+  // Note: named retRallyFib/retDeclineFib (not rallyFib/declineFib) — those
+  // names are already taken by the computeFib() test consts above, in the
+  // same function scope.
+  const retRallyFib: Fib = {
+    high: 200,
+    low: 100,
+    direction: 'rally',
+    anchor: 'swing',
+    levels: [],
+  }
+  // Rally: measured down from the high, so 150 is a 50% retracement.
+  approx(retracementRatio(150, retRallyFib), 0.5, 1e-9, 'rally: midpoint is ratio 0.5')
+  approx(retracementRatio(200, retRallyFib), 0, 1e-9, 'rally: the high is ratio 0')
+  approx(retracementRatio(100, retRallyFib), 1, 1e-9, 'rally: the low is ratio 1')
+  approx(retracementRatio(138.2, retRallyFib), 0.618, 1e-9, 'rally: 138.2 is the 0.618 level')
+
+  const retDeclineFib: Fib = {
+    high: 200,
+    low: 100,
+    direction: 'decline',
+    anchor: 'swing',
+    levels: [],
+  }
+  // Decline: measured up from the low, so 150 is still 0.5 but 161.8 is 0.618.
+  approx(retracementRatio(150, retDeclineFib), 0.5, 1e-9, 'decline: midpoint is ratio 0.5')
+  approx(retracementRatio(161.8, retDeclineFib), 0.618, 1e-9, 'decline: 161.8 is the 0.618 level')
+  eq(retracementRatio(150, null), null, 'retracementRatio: null fib returns null')
+  eq(
+    retracementRatio(100, { high: 100, low: 100, direction: 'rally', anchor: 'swing', levels: [] }),
+    null,
+    'retracementRatio: zero-span swing returns null, not a divide-by-zero',
+  )
+
+  // inGoldenZone must still agree with its documented behaviour, now that it
+  // delegates: on a rally the golden band is 138.2–150, on a decline 150–161.8.
+  eq(inGoldenZone(145, retRallyFib), true, 'inGoldenZone: rally, 145 is inside the band')
+  eq(inGoldenZone(180, retRallyFib), false, 'inGoldenZone: rally, 180 is above the band')
+  eq(inGoldenZone(155, retDeclineFib), true, 'inGoldenZone: decline, 155 is inside the band')
+  eq(inGoldenZone(120, retDeclineFib), false, 'inGoldenZone: decline, 120 is below the band')
+  eq(inGoldenZone(145, null), false, 'inGoldenZone: null fib is false')
+
+  // ── Derivations ──────────────────────────────────────────────────
+  console.log('\nDerivations')
+  approx(epsCagr5yr(30, 1.5), 20, 1e-9, 'epsCagr5yr: P/E 30 ÷ PEG 1.5 = 20%')
+  eq(epsCagr5yr(30, 0), null, 'epsCagr5yr: PEG of 0 returns null, not Infinity')
+  eq(epsCagr5yr(null, 1.5), null, 'epsCagr5yr: missing P/E returns null')
+  eq(epsCagr5yr(30, null), null, 'epsCagr5yr: missing PEG returns null')
+
+  approx(pctFromAth(80, 100), -20, 1e-9, 'pctFromAth: 80 vs ATH 100 is -20%')
+  approx(pctFromAth(100, 100), 0, 1e-9, 'pctFromAth: at the ATH is 0%')
+  eq(pctFromAth(80, 0), null, 'pctFromAth: ATH of 0 returns null')
+  eq(pctFromAth(null, 100), null, 'pctFromAth: missing price returns null')
+
+  approx(vsSma150Pct(110, 100), 10, 1e-9, 'vsSma150Pct: 10% above the SMA')
+  approx(vsSma150Pct(90, 100), -10, 1e-9, 'vsSma150Pct: 10% below the SMA')
+  eq(vsSma150Pct(110, 0), null, 'vsSma150Pct: SMA of 0 returns null')
+  eq(vsSma150Pct(110, null), null, 'vsSma150Pct: missing SMA returns null')
+
+  // ── TripleQ Score ────────────────────────────────────────────────
+  console.log('\nTripleQ Score — gates')
+
+  // A synthetic Technicals with dials for every technical factor. Only the
+  // fields the scorer reads are populated; the rest are inert.
+  function mkTech(positionPct: number, close: number, fib: Fib | null): Technicals {
+    return {
+      visible: [{ t: 0, o: close, h: close, l: close, c: close }],
+      sma150: [null],
+      channel: { upper: [], mid: [], lower: [], slopePerDay: 0, positionPct },
+      fib,
+      gaps: [],
+      verdict: 'fair',
+      positionPct,
+      signals: null,
+      windowBars: 126,
+    }
+  }
+
+  // A ticker that passes every gate and scores near the top: mega cap, all
+  // three growth readings green, price below the ATH, sitting on its SMA, at
+  // the bottom of the channel, inside the golden zone, 15% off the high.
+  const perfect: ScoreInput = {
+    symbol: 'AAA',
+    name: 'Alpha',
+    price: 100,
+    marketCap: 1e12,
+    trailingPe: 30,
+    sma150: 100,
+    // -25% from the high is the drawdown curve's full-credit point. Getting
+    // this wrong is why the "scores 100" assertion below is worth having.
+    allTimeHigh: 400 / 3, // 100 / 0.75 → pctFromAth = -25%
+    yoyPct: 40,
+    yoyState: 'pass',
+    ntmPct: 40,
+    ntmState: 'pass',
+    epsCagr5yr: 40,
+    technicals: mkTech(0, 100, { high: 200, low: 0, direction: 'rally', anchor: 'swing', levels: [] }),
+  }
+
+  const perfectEval = evaluate(perfect)
+  eq(perfectEval.passedGates, true, 'gates: the perfect input passes all five')
+  eq(perfectEval.gates.length, 5, 'gates: five gates are reported')
+  approx(perfectEval.score, 100, 0.05, 'score: the perfect input scores 100')
+
+  // Each gate must reject on its own.
+  eq(
+    evaluate({ ...perfect, marketCap: MIN_MARKET_CAP - 1 }).passedGates,
+    false,
+    'gate 1: market cap below $500B is rejected',
+  )
+  eq(
+    evaluate({ ...perfect, marketCap: MIN_MARKET_CAP }).passedGates,
+    true,
+    'gate 1: exactly $500B passes (inclusive)',
+  )
+  eq(evaluate({ ...perfect, marketCap: null }).passedGates, false, 'gate 1: unknown market cap is rejected')
+  eq(evaluate({ ...perfect, yoyPct: -1 }).passedGates, false, 'gate 2: negative YoY EPS is rejected')
+  eq(
+    evaluate({ ...perfect, yoyPct: null, yoyState: 'turnaround' }).passedGates,
+    false,
+    'gate 2: a turnaround has no growth rate, so it is rejected',
+  )
+  eq(evaluate({ ...perfect, ntmPct: 0 }).passedGates, false, 'gate 3: zero NTM growth is rejected')
+  eq(evaluate({ ...perfect, ntmState: 'na' }).passedGates, false, 'gate 3: an n/a NTM reading is rejected')
+  eq(evaluate({ ...perfect, epsCagr5yr: -5 }).passedGates, false, 'gate 4: negative EPS CAGR is rejected')
+  eq(evaluate({ ...perfect, epsCagr5yr: null }).passedGates, false, 'gate 4: unknown EPS CAGR is rejected')
+  eq(
+    evaluate({ ...perfect, price: 400 / 3 }).passedGates,
+    false,
+    'gate 5: price at the all-time high is rejected',
+  )
+  eq(
+    evaluate({ ...perfect, price: 150 }).passedGates,
+    false,
+    'gate 5: price above the all-time high is rejected',
+  )
+  eq(evaluate({ ...perfect, allTimeHigh: null }).passedGates, false, 'gate 5: unknown ATH is rejected')
+
+  console.log('\nTripleQ Score — factors')
+  const pointsOf = (e: ReturnType<typeof evaluate>, key: string) =>
+    e.factors.find((f) => f.key === key)?.points ?? -1
+
+  // Growth: 10 points per metric, full credit at +30%, linear below, capped above.
+  approx(pointsOf(perfectEval, 'growth'), WEIGHTS.growth, 1e-6, 'growth: +40% on all three earns the full 30')
+  approx(
+    pointsOf(evaluate({ ...perfect, yoyPct: 15, ntmPct: 15, epsCagr5yr: 15 }), 'growth'),
+    WEIGHTS.growth / 2,
+    1e-6,
+    'growth: +15% on all three is half credit',
+  )
+
+  // SMA proximity: peaks on the SMA, zero at ±15%.
+  approx(pointsOf(perfectEval, 'sma'), WEIGHTS.sma, 1e-6, 'sma: price on the SMA earns the full 20')
+  approx(
+    pointsOf(evaluate({ ...perfect, sma150: 100 / 1.075 }), 'sma'),
+    WEIGHTS.sma / 2,
+    0.01,
+    'sma: 7.5% above the SMA is half credit',
+  )
+  approx(
+    pointsOf(evaluate({ ...perfect, sma150: 100 / 1.3 }), 'sma'),
+    0,
+    1e-6,
+    'sma: 30% above the SMA earns nothing (clamped, never negative)',
+  )
+  approx(
+    pointsOf(evaluate({ ...perfect, sma150: null }), 'sma'),
+    0,
+    1e-6,
+    'sma: a missing SMA scores zero, not a free pass',
+  )
+
+  // Tunnel: bottom of the channel is full credit, top is zero, clamped outside.
+  approx(pointsOf(perfectEval, 'tunnel'), WEIGHTS.tunnel, 1e-6, 'tunnel: channel floor earns the full 20')
+  approx(
+    pointsOf(evaluate({ ...perfect, technicals: mkTech(50, 100, perfect.technicals!.fib) }), 'tunnel'),
+    WEIGHTS.tunnel / 2,
+    1e-6,
+    'tunnel: mid-channel is half credit',
+  )
+  approx(
+    pointsOf(evaluate({ ...perfect, technicals: mkTech(130, 100, perfect.technicals!.fib) }), 'tunnel'),
+    0,
+    1e-6,
+    'tunnel: above the upper rail clamps to zero, never negative',
+  )
+  approx(
+    pointsOf(evaluate({ ...perfect, technicals: null }), 'tunnel'),
+    0,
+    1e-6,
+    'tunnel: absent technicals score zero',
+  )
+
+  // Golden zone: full inside 0.5–0.618, tapering to zero at 0.236 / 0.786.
+  const goldenAt = (ratio: number) => {
+    // rally fib high 200 low 0 → close = 200 - 200*ratio
+    const close = 200 - 200 * ratio
+    return pointsOf(
+      evaluate({
+        ...perfect,
+        technicals: mkTech(0, close, { high: 200, low: 0, direction: 'rally', anchor: 'swing', levels: [] }),
+      }),
+      'golden',
+    )
+  }
+  approx(goldenAt(0.55), WEIGHTS.golden, 1e-6, 'golden: 0.55 retracement is full credit')
+  approx(goldenAt(0.5), WEIGHTS.golden, 1e-6, 'golden: the 0.5 edge is full credit')
+  approx(goldenAt(0.618), WEIGHTS.golden, 1e-6, 'golden: the 0.618 edge is full credit')
+  approx(goldenAt(0.368), WEIGHTS.golden / 2, 0.01, 'golden: halfway from 0.236 to 0.5 is half credit')
+  approx(goldenAt(0.236), 0, 1e-6, 'golden: the 0.236 knot is zero')
+  approx(goldenAt(0.1), 0, 1e-6, 'golden: shallower than 0.236 is zero')
+  approx(goldenAt(0.9), 0, 1e-6, 'golden: deeper than 0.786 is zero')
+
+  // Drawdown: rewards a real pullback, not a broken trend.
+  const ddAt = (dd: number) =>
+    pointsOf(evaluate({ ...perfect, price: 100, allTimeHigh: 100 / (1 - dd / 100) }), 'drawdown')
+  approx(ddAt(25), WEIGHTS.drawdown, 0.01, 'drawdown: -25% is full credit')
+  approx(ddAt(30), WEIGHTS.drawdown, 0.01, 'drawdown: -30% still full credit (plateau)')
+  approx(ddAt(8), WEIGHTS.drawdown * 0.4, 0.01, 'drawdown: -8% is 40% credit')
+  approx(ddAt(45), 0, 0.01, 'drawdown: -45% is a broken trend, zero credit')
+  approx(ddAt(60), 0, 0.01, 'drawdown: beyond -45% stays zero')
+
+  console.log('\nTripleQ Score — selection')
+  const mk = (symbol: string, over: Partial<ScoreInput>): ScoreInput => ({ ...perfect, symbol, ...over })
+
+  // A weak-but-passing name: all gates green, growth barely positive (1%),
+  // and the SMA/tunnel/drawdown factors all at their worst (30% above the
+  // SMA, top of the channel, -60% beyond the drawdown curve's domain) — but
+  // NOT the golden factor: close=100 against a 200/0 rally swing is a 0.5
+  // retracement, the golden curve's full-credit point (see the `goldenAt`
+  // assertions above). Growth (~1pt) + golden (15pts full) still isn't
+  // enough to clear the 50 cutoff.
+  const weak = mk('WEAK', {
+    yoyPct: 1,
+    ntmPct: 1,
+    epsCagr5yr: 1,
+    sma150: 100 / 1.3,
+    allTimeHigh: 100 / (1 - 0.6),
+    technicals: mkTech(100, 100, { high: 200, low: 0, direction: 'rally', anchor: 'swing', levels: [] }),
+  })
+  eq(evaluate(weak).passedGates, true, 'selection: the weak name passes every gate')
+  eq(evaluate(weak).score < MIN_SCORE, true, 'selection: the weak name scores under the cutoff')
+
+  const sel = selectPicks([weak, mk('BBB', {}), mk('CCC', { marketCap: 1 })])
+  eq(sel.picks.length, 1, 'selection: only the qualifying, above-cutoff name is picked')
+  eq(sel.picks[0].symbol, 'BBB', 'selection: the picked name is the one that qualified')
+  eq(sel.considered, 3, 'selection: reports how many were considered')
+  eq(sel.belowCutoff, 1, 'selection: reports how many cleared the gates but missed the cutoff')
+
+  // Ordering and the cap.
+  const many = Array.from({ length: 14 }, (_, i) =>
+    mk(`T${String(i).padStart(2, '0')}`, { yoyPct: 30 - i, ntmPct: 30 - i, epsCagr5yr: 30 - i }),
+  )
+  const capped = selectPicks(many)
+  eq(capped.picks.length, MAX_PICKS, 'selection: never returns more than MAX_PICKS')
+  eq(capped.picks[0].symbol, 'T00', 'selection: the highest score ranks first')
+  eq(
+    capped.picks.every((p, i, a) => i === 0 || a[i - 1].score >= p.score),
+    true,
+    'selection: picks are ordered by score descending',
+  )
+
+  // Ties break on symbol so two runs of the same data produce the same email.
+  const tied = selectPicks([mk('ZZZ', {}), mk('AAB', {})])
+  eq(tied.picks[0].symbol, 'AAB', 'selection: equal scores tie-break on symbol ascending')
+
+  eq(selectPicks([]).picks.length, 0, 'selection: an empty watchlist yields no picks')
+  eq(
+    selectPicks([mk('DDD', { marketCap: 1 })]).picks.length,
+    0,
+    'selection: a list where nothing qualifies yields no picks',
+  )
+  eq(
+    evaluate(perfect).reasons.length > 0,
+    true,
+    'reasons: a high-scoring pick explains itself',
+  )
+
+  // ── Email renderers ─────────────────────────────────────────────
+  // The only Critical this branch found was a proved XSS in renderConfirm.
+  // It was fixed and the payload deleted, but no regression guard was left
+  // behind — these assertions are that guard. Local names are prefixed
+  // `renderer` to avoid colliding with the many consts already declared
+  // above in this same function scope (mk, perfect, capped, tied, ...).
+  console.log('\nEmail renderers')
+
+  const rendererXssPayload = '"><script>alert(1)</script>'
+
+  const rendererConfirmHtml = renderConfirm({
+    firstName: 'Test',
+    confirmUrl: rendererXssPayload,
+  }).html
+  eq(
+    rendererConfirmHtml.includes('<script'),
+    false,
+    'renderConfirm: an XSS payload in confirmUrl is escaped, not rendered as a tag',
+  )
+
+  const rendererXssPick = toPick(evaluate(mk('XSS', { name: rendererXssPayload })))
+  const rendererDigestXssHtml = renderDigest({
+    recipient: { firstName: 'Test', unsubscribeToken: 'tok' },
+    selection: { picks: [rendererXssPick], considered: 1, belowCutoff: 0 },
+    asOfLabel: 'Monday, 1 January 2026',
+    siteUrl: 'https://example.com',
+  }).html
+  eq(
+    rendererDigestXssHtml.includes('<script'),
+    false,
+    'renderDigest: an XSS payload in a pick name is escaped, not rendered as a tag',
+  )
+
+  const rendererEmpty = renderDigest({
+    recipient: { firstName: 'Test', unsubscribeToken: 'tok' },
+    selection: { picks: [], considered: 12, belowCutoff: 2 },
+    asOfLabel: 'Monday, 1 January 2026',
+    siteUrl: 'https://example.com',
+  })
+  eq(
+    rendererEmpty.subject,
+    'TripleQ Daily Maily — no setups cleared the bar today',
+    'renderDigest: zero picks renders the no-setups subject variant',
+  )
+  eq(
+    rendererEmpty.html.includes('Nothing cleared the bar this morning'),
+    true,
+    'renderDigest: zero picks renders the empty-state body',
+  )
+
+  // Every numeric input null (not just technicals) — exercises every
+  // null-guarded formatter (usd/bigUsd/num/pct) plus the tunnel bar's own
+  // inline `.toFixed(0)`, which is not routed through pct()/format.ts.
+  const rendererNullPick = toPick(
+    evaluate(
+      mk('NULLS', {
+        price: null,
+        marketCap: null,
+        trailingPe: null,
+        sma150: null,
+        allTimeHigh: null,
+        yoyPct: null,
+        ntmPct: null,
+        epsCagr5yr: null,
+        technicals: null,
+      }),
+    ),
+  )
+  const rendererNullHtml = renderDigest({
+    recipient: { firstName: 'Test', unsubscribeToken: 'tok' },
+    selection: { picks: [rendererNullPick], considered: 1, belowCutoff: 0 },
+    asOfLabel: 'Monday, 1 January 2026',
+    siteUrl: 'https://example.com',
+  }).html
+  eq(
+    rendererNullHtml.includes('NaN%'),
+    false,
+    'renderDigest: null technical readings never render as "NaN%"',
+  )
+
+  // Email clients: Gmail drops inline SVG, and neither Gmail nor Outlook
+  // (which renders through Word) can be trusted with flex/grid layout — every
+  // "chart" in this email must be a table with percentage-width cells.
+  const rendererFullHtml = renderDigest({
+    recipient: { firstName: 'Test', unsubscribeToken: 'tok' },
+    selection: capped,
+    asOfLabel: 'Monday, 1 January 2026',
+    siteUrl: 'https://example.com',
+  }).html
+  eq(rendererFullHtml.includes('<svg'), false, 'renderDigest: no inline SVG anywhere in the output')
+  eq(rendererFullHtml.includes('display:flex'), false, 'renderDigest: no flexbox layout anywhere in the output')
+  eq(rendererFullHtml.includes('display:grid'), false, 'renderDigest: no grid layout anywhere in the output')
 
   // ── Result ───────────────────────────────────────────────────────
   console.log('')

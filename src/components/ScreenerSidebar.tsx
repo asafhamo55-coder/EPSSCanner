@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { Calculator, LineChart } from 'lucide-react'
+import { Calculator, LineChart, Mail } from 'lucide-react'
 import {
   NavItem,
   SidebarBrand,
@@ -14,6 +14,7 @@ import {
 const NAV = [
   { href: '/', label: 'Dashboard', icon: <LineChart className="h-4 w-4" /> },
   { href: '/evaluation', label: 'Company evaluation', icon: <Calculator className="h-4 w-4" /> },
+  { href: '/daily', label: 'Daily Maily', icon: <Mail className="h-4 w-4" /> },
 ]
 
 export function ScreenerSidebar() {

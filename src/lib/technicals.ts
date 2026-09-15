@@ -337,20 +337,32 @@ export function findGaps(visible: Bar[]): Gap[] {
 }
 
 // ─── Verdict ─────────────────────────────────────────────────────────
+/** Where `close` sits on the Fib swing, as the same 0–1 ratio the levels use:
+ *  on a rally, measured DOWN from the high (0 = the high, 1 = the low); on a
+ *  decline, measured UP from the low. Values outside 0–1 are returned as-is —
+ *  price can trade beyond either anchor — so callers clamp if they need to.
+ *  Null when there is no swing to measure against, or the swing has no span. */
+export function retracementRatio(close: number, fib: Fib | null): number | null {
+  if (!fib) return null
+  const span = fib.high - fib.low
+  if (!Number.isFinite(span) || span <= 0) return null
+  return fib.direction === 'rally' ? (fib.high - close) / span : (close - fib.low) / span
+}
+
 /** Is `close` inside the golden-zone retracement band?
  *
- *  The two level prices are derived from the ratios rather than assumed to be
- *  in any order: on a rally the higher ratio is the LOWER price (levels are
- *  measured down from the swing high) and on a decline it is inverted. Taking
- *  min/max keeps one comparison correct for both directions. */
+ *  Delegates to `retracementRatio` so the boolean and the continuous reading
+ *  can never drift apart. The band is expressed in ratio space, which is
+ *  direction-agnostic — on a rally the higher ratio is the LOWER price, and
+ *  comparing ratios rather than prices makes that asymmetry disappear. */
 export function inGoldenZone(close: number, fib: Fib | null): boolean {
-  if (!fib) return false
-  const span = fib.high - fib.low
-  const at = (ratio: number) =>
-    fib.direction === 'rally' ? fib.high - span * ratio : fib.low + span * ratio
-  const a = at(GOLDEN_ZONE_LOW)
-  const b = at(GOLDEN_ZONE_HIGH)
-  return close >= Math.min(a, b) && close <= Math.max(a, b)
+  const r = retracementRatio(close, fib)
+  if (r == null) return false
+  // Epsilon guards the boundary: computing the ratio via division (rather
+  // than comparing prices directly) means a close exactly on the 0.618 level
+  // can land a ULP outside [0.5, 0.618] after floating-point rounding.
+  const EPS = 1e-9
+  return r >= GOLDEN_ZONE_LOW - EPS && r <= GOLDEN_ZONE_HIGH + EPS
 }
 
 /** Score the three buy factors. Any missing input (no Fib anchor, SMA still in
