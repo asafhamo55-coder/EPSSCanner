@@ -42,9 +42,12 @@ import {
 import type { Bar } from '../src/market-data/provider'
 import type { Fib, Technicals } from '../src/lib/technicals'
 import { epsCagr5yr, pctFromAth, vsSma150Pct } from '../src/lib/derive'
+import { renderConfirm } from '../src/lib/email/confirm'
+import { renderDigest } from '../src/lib/email/render'
 import {
   evaluate,
   selectPicks,
+  toPick,
   MAX_PICKS,
   MIN_MARKET_CAP,
   MIN_SCORE,
@@ -641,8 +644,13 @@ async function main() {
   console.log('\nTripleQ Score — selection')
   const mk = (symbol: string, over: Partial<ScoreInput>): ScoreInput => ({ ...perfect, symbol, ...over })
 
-  // A weak-but-passing name: all gates green, but every technical factor at
-  // its worst, so the score lands under the 50 cutoff.
+  // A weak-but-passing name: all gates green, growth barely positive (1%),
+  // and the SMA/tunnel/drawdown factors all at their worst (30% above the
+  // SMA, top of the channel, -60% beyond the drawdown curve's domain) — but
+  // NOT the golden factor: close=100 against a 200/0 rally swing is a 0.5
+  // retracement, the golden curve's full-credit point (see the `goldenAt`
+  // assertions above). Growth (~1pt) + golden (15pts full) still isn't
+  // enough to clear the 50 cutoff.
   const weak = mk('WEAK', {
     yoyPct: 1,
     ntmPct: 1,
@@ -688,6 +696,99 @@ async function main() {
     true,
     'reasons: a high-scoring pick explains itself',
   )
+
+  // ── Email renderers ─────────────────────────────────────────────
+  // The only Critical this branch found was a proved XSS in renderConfirm.
+  // It was fixed and the payload deleted, but no regression guard was left
+  // behind — these assertions are that guard. Local names are prefixed
+  // `renderer` to avoid colliding with the many consts already declared
+  // above in this same function scope (mk, perfect, capped, tied, ...).
+  console.log('\nEmail renderers')
+
+  const rendererXssPayload = '"><script>alert(1)</script>'
+
+  const rendererConfirmHtml = renderConfirm({
+    firstName: 'Test',
+    confirmUrl: rendererXssPayload,
+  }).html
+  eq(
+    rendererConfirmHtml.includes('<script'),
+    false,
+    'renderConfirm: an XSS payload in confirmUrl is escaped, not rendered as a tag',
+  )
+
+  const rendererXssPick = toPick(evaluate(mk('XSS', { name: rendererXssPayload })))
+  const rendererDigestXssHtml = renderDigest({
+    recipient: { firstName: 'Test', unsubscribeToken: 'tok' },
+    selection: { picks: [rendererXssPick], considered: 1, belowCutoff: 0 },
+    asOfLabel: 'Monday, 1 January 2026',
+    siteUrl: 'https://example.com',
+  }).html
+  eq(
+    rendererDigestXssHtml.includes('<script'),
+    false,
+    'renderDigest: an XSS payload in a pick name is escaped, not rendered as a tag',
+  )
+
+  const rendererEmpty = renderDigest({
+    recipient: { firstName: 'Test', unsubscribeToken: 'tok' },
+    selection: { picks: [], considered: 12, belowCutoff: 2 },
+    asOfLabel: 'Monday, 1 January 2026',
+    siteUrl: 'https://example.com',
+  })
+  eq(
+    rendererEmpty.subject,
+    'TripleQ Daily Maily — no setups cleared the bar today',
+    'renderDigest: zero picks renders the no-setups subject variant',
+  )
+  eq(
+    rendererEmpty.html.includes('Nothing cleared the bar this morning'),
+    true,
+    'renderDigest: zero picks renders the empty-state body',
+  )
+
+  // Every numeric input null (not just technicals) — exercises every
+  // null-guarded formatter (usd/bigUsd/num/pct) plus the tunnel bar's own
+  // inline `.toFixed(0)`, which is not routed through pct()/format.ts.
+  const rendererNullPick = toPick(
+    evaluate(
+      mk('NULLS', {
+        price: null,
+        marketCap: null,
+        trailingPe: null,
+        sma150: null,
+        allTimeHigh: null,
+        yoyPct: null,
+        ntmPct: null,
+        epsCagr5yr: null,
+        technicals: null,
+      }),
+    ),
+  )
+  const rendererNullHtml = renderDigest({
+    recipient: { firstName: 'Test', unsubscribeToken: 'tok' },
+    selection: { picks: [rendererNullPick], considered: 1, belowCutoff: 0 },
+    asOfLabel: 'Monday, 1 January 2026',
+    siteUrl: 'https://example.com',
+  }).html
+  eq(
+    rendererNullHtml.includes('NaN%'),
+    false,
+    'renderDigest: null technical readings never render as "NaN%"',
+  )
+
+  // Email clients: Gmail drops inline SVG, and neither Gmail nor Outlook
+  // (which renders through Word) can be trusted with flex/grid layout — every
+  // "chart" in this email must be a table with percentage-width cells.
+  const rendererFullHtml = renderDigest({
+    recipient: { firstName: 'Test', unsubscribeToken: 'tok' },
+    selection: capped,
+    asOfLabel: 'Monday, 1 January 2026',
+    siteUrl: 'https://example.com',
+  }).html
+  eq(rendererFullHtml.includes('<svg'), false, 'renderDigest: no inline SVG anywhere in the output')
+  eq(rendererFullHtml.includes('display:flex'), false, 'renderDigest: no flexbox layout anywhere in the output')
+  eq(rendererFullHtml.includes('display:grid'), false, 'renderDigest: no grid layout anywhere in the output')
 
   // ── Result ───────────────────────────────────────────────────────
   console.log('')

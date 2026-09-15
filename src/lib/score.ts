@@ -216,15 +216,33 @@ export function runGates(input: ScoreInput): GateResult[] {
   ]
 }
 
-// ─── Factors ────────────────────────────────────────────────────────
-export function runFactors(input: ScoreInput): FactorScore[] {
+// ─── Shared derivation ──────────────────────────────────────────────
+/** Readings derived from a ScoreInput that both runFactors() (to score them)
+ *  and toPick() (to display them) need. Computed once here so the two can't
+ *  drift into recomputing lastClose / retracementRatio / vsSma150Pct /
+ *  pctFromAth independently. */
+export interface DerivedReadings {
+  positionPct: number | null
+  retracement: number | null
+  vsSma150Pct: number | null
+  pctFromAth: number | null
+}
+
+export function deriveReadings(input: ScoreInput): DerivedReadings {
   const tech = input.technicals
-  const positionPct = tech?.channel ? tech.channel.positionPct : null
   const lastClose =
     tech && tech.visible.length > 0 ? tech.visible[tech.visible.length - 1].c : null
-  const r = lastClose != null ? retracementRatio(lastClose, tech?.fib ?? null) : null
-  const vsSma = vsSma150Pct(input.price, input.sma150)
-  const dd = pctFromAth(input.price, input.allTimeHigh)
+  return {
+    positionPct: tech?.channel ? tech.channel.positionPct : null,
+    retracement: lastClose != null ? retracementRatio(lastClose, tech?.fib ?? null) : null,
+    vsSma150Pct: vsSma150Pct(input.price, input.sma150),
+    pctFromAth: pctFromAth(input.price, input.allTimeHigh),
+  }
+}
+
+// ─── Factors ────────────────────────────────────────────────────────
+export function runFactors(input: ScoreInput): FactorScore[] {
+  const { positionPct, retracement: r, vsSma150Pct: vsSma, pctFromAth: dd } = deriveReadings(input)
 
   // Growth — three equal sub-scores. Averaging the units keeps a single strong
   // metric from carrying two weak ones.
@@ -326,8 +344,7 @@ export function evaluate(input: ScoreInput): Evaluation {
 /** Exported for fixture construction — a later task's preview script builds
  *  `ScoredPick` fixtures through this instead of hand-duplicating the shape. */
 export function toPick(e: Evaluation): ScoredPick {
-  const t = e.input.technicals
-  const lastClose = t && t.visible.length > 0 ? t.visible[t.visible.length - 1].c : null
+  const readings = deriveReadings(e.input)
   return {
     ...e,
     symbol: e.input.symbol,
@@ -335,10 +352,10 @@ export function toPick(e: Evaluation): ScoredPick {
     price: e.input.price,
     marketCap: e.input.marketCap,
     trailingPe: e.input.trailingPe,
-    vsSma150Pct: vsSma150Pct(e.input.price, e.input.sma150),
-    pctFromAth: pctFromAth(e.input.price, e.input.allTimeHigh),
-    positionPct: t?.channel ? t.channel.positionPct : null,
-    retracement: lastClose != null ? retracementRatio(lastClose, t?.fib ?? null) : null,
+    vsSma150Pct: readings.vsSma150Pct,
+    pctFromAth: readings.pctFromAth,
+    positionPct: readings.positionPct,
+    retracement: readings.retracement,
     yoyPct: e.input.yoyPct,
     ntmPct: e.input.ntmPct,
     epsCagr5yr: e.input.epsCagr5yr,
