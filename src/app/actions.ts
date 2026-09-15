@@ -1,6 +1,7 @@
 'use server'
 
 import { revalidatePath, revalidateTag } from 'next/cache'
+import { after } from 'next/server'
 import { z } from 'zod'
 import { db } from '@/lib/db'
 import { renderConfirm } from '@/lib/email/confirm'
@@ -203,9 +204,17 @@ export async function subscribeAction(input: {
     if (outcome !== 'already-confirmed' && subscriber.confirmToken) {
       const confirmUrl = `${siteUrl()}/api/subscribe/confirm?token=${encodeURIComponent(subscriber.confirmToken)}`
       const mail = renderConfirm({ firstName: subscriber.firstName, confirmUrl })
-      await sendEmails([
-        { to: subscriber.email, subject: mail.subject, html: mail.html, text: mail.text },
-      ])
+      // Dispatched AFTER the response is sent, for two reasons. The response
+      // time no longer depends on which branch ran, so it cannot be timed to
+      // reveal whether an address is already subscribed — the identical
+      // success copy above would otherwise be undone by a measurable delay.
+      // And the form stops waiting on a third-party HTTP round-trip it does
+      // not need to block on.
+      after(async () => {
+        await sendEmails([
+          { to: subscriber.email, subject: mail.subject, html: mail.html, text: mail.text },
+        ])
+      })
     }
     return { ok: true, message: 'Check your inbox — confirm the link and your first digest arrives at 6 AM ET.' }
   } catch (e) {
