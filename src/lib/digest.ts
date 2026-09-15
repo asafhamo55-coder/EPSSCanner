@@ -2,6 +2,7 @@
 // screener's stored data maps onto ScoreInput, so the email and the preview
 // page cannot rank different stocks.
 
+import { unstable_cache } from 'next/cache'
 import { epsCagr5yr } from './derive'
 import { getWatchlist, liveTechnicals } from './queries'
 import { selectPicks, type ScoreInput, type Selection } from './score'
@@ -53,3 +54,17 @@ export async function buildSelection(): Promise<Selection> {
   })
   return selectPicks(inputs)
 }
+
+/** Cached wrapper for the public, unauthenticated /daily preview page.
+ *  buildSelection() is roughly 172 Supabase round-trips plus up to 57 Yahoo
+ *  calls on a cold cache — the page's own `export const revalidate = 300` is
+ *  dead (searchParams forces it dynamic), so every view re-ran that whole
+ *  fan-out. This follows the same unstable_cache + 'yahoo-live' tag pattern
+ *  queries.ts uses for its own live fields: publish() (src/lib/publish.ts)
+ *  drops the 'yahoo-live' tag after every ingest, which invalidates this too,
+ *  so the /api/digest route's own uncached buildSelection() call is
+ *  unaffected — this wrapper exists only for the page. */
+export const getCachedSelection = unstable_cache(buildSelection, ['digest-selection-v1'], {
+  revalidate: 300,
+  tags: ['yahoo-live'],
+})

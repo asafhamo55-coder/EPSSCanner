@@ -345,6 +345,45 @@ export function toPick(e: Evaluation): ScoredPick {
   }
 }
 
+/** Compact projection of a ScoredPick for persistence (screener_digest_sends.
+ *  picks, a jsonb audit column). Deliberately excludes `input.technicals` —
+ *  126 OHLC bars plus four 126-point series per pick, ~30–60KB each, which
+ *  would otherwise accumulate at roughly 0.5MB/day / 150MB/year of raw market
+ *  data inside an audit table, against a 500MB Supabase free-tier cap. Kept
+ *  next to ScoredPick/toPick so the audit shape stays defined beside the type
+ *  it projects. */
+export interface DigestPickRecord {
+  symbol: string
+  name: string | null
+  score: number
+  factors: Array<{ key: FactorKey; points: number; max: number }>
+  price: number | null
+  marketCap: number | null
+  trailingPe: number | null
+  yoyPct: number | null
+  ntmPct: number | null
+  epsCagr5yr: number | null
+  vsSma150Pct: number | null
+  pctFromAth: number | null
+}
+
+export function toDigestPickRecord(p: ScoredPick): DigestPickRecord {
+  return {
+    symbol: p.symbol,
+    name: p.name,
+    score: p.score,
+    factors: p.factors.map((f) => ({ key: f.key, points: f.points, max: f.max })),
+    price: p.price,
+    marketCap: p.marketCap,
+    trailingPe: p.trailingPe,
+    yoyPct: p.yoyPct,
+    ntmPct: p.ntmPct,
+    epsCagr5yr: p.epsCagr5yr,
+    vsSma150Pct: p.vsSma150Pct,
+    pctFromAth: p.pctFromAth,
+  }
+}
+
 /** Gate, score, cut at MIN_SCORE, rank, cap at MAX_PICKS.
  *
  *  Ties break on symbol ascending so the same data always produces the same

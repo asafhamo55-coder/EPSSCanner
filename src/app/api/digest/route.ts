@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { ingestAllActive } from '@/lib/ingest'
 import { publish } from '@/lib/publish'
 import { buildSelection } from '@/lib/digest'
+import { toDigestPickRecord } from '@/lib/score'
 import { renderDigest } from '@/lib/email/render'
 import { sendEmails, type EmailMessage } from '@/lib/email/send'
 import { claimDigestDay, listConfirmed, recordDigestSend, releaseDigestDay } from '@/lib/subscribers'
@@ -196,9 +197,16 @@ export async function GET(req: NextRequest) {
         )
       }
 
-      // 6. Record.
+      // 6. Record. Persist the compact DTO, not the full ScoredPick — the
+      // latter carries input.technicals (126 OHLC bars + four 126-point
+      // series per pick), which does not belong in this jsonb audit column.
       if (claimId) {
-        await recordDigestSend(claimId, report.sent, selection.picks.length, selection.picks)
+        await recordDigestSend(
+          claimId,
+          report.sent,
+          selection.picks.length,
+          selection.picks.map(toDigestPickRecord),
+        )
       }
 
       return NextResponse.json({

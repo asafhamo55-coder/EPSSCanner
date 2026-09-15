@@ -1,17 +1,23 @@
 import { Suspense } from 'react'
 import { Mail } from 'lucide-react'
 import { Alert, Card, CardContent, CardDescription, CardHeader, CardTitle, PageHeader } from '@/ui'
-import { buildSelection } from '@/lib/digest'
+import { getCachedSelection } from '@/lib/digest'
 import { MAX_PICKS, MIN_MARKET_CAP, MIN_SCORE } from '@/lib/score'
 import { SubscribeForm } from '@/components/SubscribeForm'
 import { DigestPreview } from '@/components/DigestPreview'
 import { WatchlistSkeleton } from '@/components/DashboardSkeletons'
 
-// Same ISR window as the dashboard — the preview runs the identical fan-out.
-export const revalidate = 300
+// NOTE: no page-level `export const revalidate` here — `await searchParams`
+// below (the confirmed/unsubscribed flags) forces this page dynamic, which
+// makes a page-level revalidate dead code (confirmed by `pnpm build`: this
+// route ships as `ƒ` with no revalidate window). The actual caching lives on
+// the expensive part only — getCachedSelection() in src/lib/digest.ts wraps
+// buildSelection() in unstable_cache — so the page stays dynamic for the
+// cheap query-flag rendering while the ~172-Supabase-round-trip fan-out is
+// still shared across requests.
 
 async function TodaysPicks() {
-  const selection = await buildSelection()
+  const selection = await getCachedSelection()
   return <DigestPreview selection={selection} />
 }
 
