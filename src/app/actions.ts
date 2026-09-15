@@ -1,10 +1,15 @@
 'use server'
 
 import { revalidatePath, revalidateTag } from 'next/cache'
+import { z } from 'zod'
 import { db } from '@/lib/db'
+import { renderConfirm } from '@/lib/email/confirm'
+import { sendEmails } from '@/lib/email/send'
 import { ingestAllActive, ingestTicker } from '@/lib/ingest'
 import { getProvider } from '@/market-data'
 import { liveTechnicals } from '@/lib/queries'
+import { siteUrl } from '@/lib/site'
+import { upsertSubscriber } from '@/lib/subscribers'
 import type { Technicals } from '@/lib/technicals'
 
 export interface ActionResult {
@@ -168,5 +173,42 @@ export async function getTechnicals(symbol: string): Promise<Technicals | null> 
     ])
   } finally {
     if (timer) clearTimeout(timer)
+  }
+}
+
+const SubscribeInput = z.object({
+  firstName: z.string().trim().min(1, 'Enter your first name.').max(60),
+  lastName: z.string().trim().min(1, 'Enter your last name.').max(60),
+  email: z.string().trim().toLowerCase().email('Enter a valid email address.').max(254),
+})
+
+/** Register for the daily digest. Double opt-in: this only ever creates a
+ *  pending row and mails a confirmation link — nothing is added to the send
+ *  list until that link is clicked.
+ *
+ *  The success message is identical whether the address was new or already
+ *  confirmed. Differentiating them would turn this public form into an oracle
+ *  that reports whether a given address is on the list. */
+export async function subscribeAction(input: {
+  firstName: string
+  lastName: string
+  email: string
+}): Promise<ActionResult> {
+  const parsed = SubscribeInput.safeParse(input)
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? 'Check the form and try again.' }
+  }
+  try {
+    const { outcome, subscriber } = await upsertSubscriber(parsed.data)
+    if (outcome !== 'already-confirmed' && subscriber.confirmToken) {
+      const confirmUrl = `${siteUrl()}/api/subscribe/confirm?token=${encodeURIComponent(subscriber.confirmToken)}`
+      const mail = renderConfirm({ firstName: subscriber.firstName, confirmUrl })
+      await sendEmails([
+        { to: subscriber.email, subject: mail.subject, html: mail.html, text: mail.text },
+      ])
+    }
+    return { ok: true, message: 'Check your inbox — confirm the link and your first digest arrives at 6 AM ET.' }
+  } catch (e) {
+    return { ok: false, error: (e as Error).message }
   }
 }
