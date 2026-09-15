@@ -20,7 +20,7 @@ export function renderConfirm(data: { firstName: string; confirmUrl: string }): 
   Hi ${escapeHtml(data.firstName)}, confirm your address and the TripleQ Daily Maily will land in
   your inbox at 6:00 AM Eastern every morning — the watchlist names that cleared our entry gate,
   ranked by the TripleQ Score.<br><br>
-  <a href="${data.confirmUrl}" style="display:inline-block;background:${PALETTE.brand};color:#ffffff;font:700 14px ${FONT};text-decoration:none;padding:12px 22px;border-radius:10px;">Confirm my subscription</a><br><br>
+  <a href="${escapeHtml(data.confirmUrl)}" style="display:inline-block;background:${PALETTE.brand};color:#ffffff;font:700 14px ${FONT};text-decoration:none;padding:12px 22px;border-radius:10px;">Confirm my subscription</a><br><br>
   <span style="font:400 12px ${FONT};color:${PALETTE.muted};">If you did not request this, ignore this email — nothing will be sent.</span>
 </td></tr>`
   const text = [

@@ -63,7 +63,7 @@ function card(p: ScoredPick, rank: number, siteUrl: string): string {
               <img src="${logoUrl(p.symbol)}" width="32" height="32" alt="${escapeHtml(p.symbol)}" style="width:32px;height:32px;border-radius:8px;display:block;border:0;">
             </td>
             <td valign="middle">
-              <a href="${href}" style="text-decoration:none;">
+              <a href="${escapeHtml(href)}" style="text-decoration:none;">
                 <span style="font:700 17px ${FONT};color:${PALETTE.ink};">${escapeHtml(p.symbol)}</span><br>
                 <span style="font:400 12px ${FONT};color:${PALETTE.muted};">${escapeHtml(p.name ?? '')}</span>
               </a>
@@ -126,7 +126,7 @@ function card(p: ScoredPick, rank: number, siteUrl: string): string {
     <tr>
       <td style="padding:2px 18px 16px 18px;font:400 12px ${FONT};color:${PALETTE.body};line-height:1.6;">
         ${escapeHtml(reason)}
-        <a href="${href}" style="color:${PALETTE.brand};text-decoration:none;font-weight:700;">See the chart →</a>
+        <a href="${escapeHtml(href)}" style="color:${PALETTE.brand};text-decoration:none;font-weight:700;">See the chart →</a>
       </td>
     </tr>
   </table>
@@ -198,7 +198,7 @@ export function renderDigest(data: DigestData): { subject: string; html: string;
     header + (n === 0 ? emptyState(data.selection) : picks.map((p, i) => card(p, i + 1, data.siteUrl)).join(''))
 
   const footerLinks = `You are receiving this because you confirmed your subscription at ${escapeHtml(data.siteUrl)}.<br>
-<a href="${unsubUrl}" style="color:${PALETTE.muted};">Unsubscribe</a>`
+<a href="${escapeHtml(unsubUrl)}" style="color:${PALETTE.muted};">Unsubscribe</a>`
 
   const text = [
     `TripleQ Daily Maily — ${data.asOfLabel}`,
