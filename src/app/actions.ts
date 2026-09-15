@@ -220,7 +220,11 @@ export async function subscribeAction(input: {
   try {
     const { outcome, subscriber } = await upsertSubscriber(parsed.data)
     if (outcome !== 'already-confirmed' && subscriber.confirmToken) {
-      const confirmUrl = `${siteUrl()}/api/subscribe/confirm?token=${encodeURIComponent(subscriber.confirmToken)}`
+      // Links to the /daily/confirm interstitial page, not the API route
+      // directly — a GET there only renders a "click to confirm" button and
+      // never mutates, so a mail gateway's link scanner cannot auto-confirm
+      // this signup on the recipient's behalf.
+      const confirmUrl = `${siteUrl()}/daily/confirm?token=${encodeURIComponent(subscriber.confirmToken)}`
       const mail = renderConfirm({ firstName: subscriber.firstName, confirmUrl })
       // Dispatched AFTER the response is sent, for two reasons. The response
       // time no longer depends on which branch ran, so it cannot be timed to
