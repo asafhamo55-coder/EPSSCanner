@@ -4,7 +4,7 @@ import { publish } from '@/lib/publish'
 import { buildSelection } from '@/lib/digest'
 import { renderDigest } from '@/lib/email/render'
 import { sendEmails, type EmailMessage } from '@/lib/email/send'
-import { claimDigestDay, listConfirmed, recordDigestSend } from '@/lib/subscribers'
+import { claimDigestDay, listConfirmed, recordDigestSend, releaseDigestDay } from '@/lib/subscribers'
 import { siteUrl } from '@/lib/site'
 import { db } from '@/lib/db'
 
@@ -111,64 +111,84 @@ export async function GET(req: NextRequest) {
       if (!claimId) return NextResponse.json({ ok: true, skipped: 'already-sent', sentOn: today })
     }
 
-    // 4. Build.
-    const selection = await buildSelection()
-    const origin = siteUrl()
-    const asOfLabel = easternLabel(now)
+    // 4–6. Build, send, record. Tracked with its own try/catch: a failure
+    // here after the day was claimed above must release the claim so the
+    // digest can be retried — UNLESS the send has already started, because
+    // releasing after even a partial send would let a retry double-mail
+    // whoever already received it.
+    let sendStarted = false
+    try {
+      // 4. Build.
+      const selection = await buildSelection()
+      const origin = siteUrl()
+      const asOfLabel = easternLabel(now)
 
-    // 5. Send.
-    const recipients = force
-      ? (() => {
-          const test = process.env.DIGEST_TEST_EMAIL
-          return test
-            ? [{ email: test, firstName: 'there', unsubscribeToken: 'force-preview' }]
-            : []
-        })()
-      : (await listConfirmed()).map((s) => ({
-          email: s.email,
-          firstName: s.firstName,
-          unsubscribeToken: s.unsubscribeToken,
-        }))
+      // 5. Send.
+      const recipients = force
+        ? (() => {
+            const test = process.env.DIGEST_TEST_EMAIL
+            return test
+              ? [{ email: test, firstName: 'there', unsubscribeToken: 'force-preview' }]
+              : []
+          })()
+        : (await listConfirmed()).map((s) => ({
+            email: s.email,
+            firstName: s.firstName,
+            unsubscribeToken: s.unsubscribeToken,
+          }))
 
-    const messages: EmailMessage[] = recipients.map((r) => {
-      const mail = renderDigest({
-        recipient: { firstName: r.firstName, unsubscribeToken: r.unsubscribeToken },
-        selection,
-        asOfLabel,
-        siteUrl: origin,
+      const messages: EmailMessage[] = recipients.map((r) => {
+        const mail = renderDigest({
+          recipient: { firstName: r.firstName, unsubscribeToken: r.unsubscribeToken },
+          selection,
+          asOfLabel,
+          siteUrl: origin,
+        })
+        const unsub = `${origin}/api/subscribe/unsubscribe?token=${encodeURIComponent(r.unsubscribeToken)}`
+        return {
+          to: r.email,
+          subject: mail.subject,
+          html: mail.html,
+          text: mail.text,
+          headers: {
+            'List-Unsubscribe': `<${unsub}>`,
+            'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+          },
+        }
       })
-      const unsub = `${origin}/api/subscribe/unsubscribe?token=${encodeURIComponent(r.unsubscribeToken)}`
-      return {
-        to: r.email,
-        subject: mail.subject,
-        html: mail.html,
-        text: mail.text,
-        headers: {
-          'List-Unsubscribe': `<${unsub}>`,
-          'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
-        },
+
+      sendStarted = true
+      const report = await sendEmails(messages)
+
+      // Nothing reads the JSON response at 6 AM, so a failed or partial send
+      // must show up somewhere an alert or a human can see it.
+      if (report.failed > 0) {
+        console.error(
+          `[digest] ${report.failed}/${messages.length} message(s) failed to send: ${report.errors.join('; ')}`,
+        )
       }
-    })
 
-    const report = await sendEmails(messages)
+      // 6. Record.
+      if (claimId) {
+        await recordDigestSend(claimId, report.sent, selection.picks.length, selection.picks)
+      }
 
-    // 6. Record.
-    if (claimId) {
-      await recordDigestSend(claimId, report.sent, selection.picks.length, selection.picks)
+      return NextResponse.json({
+        ok: true,
+        force,
+        sentOn: today,
+        refreshed,
+        considered: selection.considered,
+        picks: selection.picks.length,
+        recipients: recipients.length,
+        sent: report.sent,
+        failed: report.failed,
+        errors: report.errors,
+      })
+    } catch (e) {
+      if (claimId && !sendStarted) await releaseDigestDay(claimId)
+      throw e
     }
-
-    return NextResponse.json({
-      ok: true,
-      force,
-      sentOn: today,
-      refreshed,
-      considered: selection.considered,
-      picks: selection.picks.length,
-      recipients: recipients.length,
-      sent: report.sent,
-      failed: report.failed,
-      errors: report.errors,
-    })
   } catch (e) {
     return NextResponse.json({ ok: false, error: (e as Error).message }, { status: 502 })
   }

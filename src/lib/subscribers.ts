@@ -174,6 +174,20 @@ export async function claimDigestDay(sentOn: string): Promise<string | null> {
   return (data as Row).id as string
 }
 
+/** Release a claimed day after a failure that happened BEFORE any mail went
+ *  out, so the digest can be retried instead of being lost.
+ *
+ *  Safe only on that path: `sent_on` is UNIQUE, so leaving the row behind
+ *  burns the day permanently, but deleting it after even a partial send would
+ *  let a retry mail those recipients twice. The caller is responsible for
+ *  proving nothing was sent. Best-effort — a failure to release is logged, not
+ *  thrown, because it must never mask the original error. */
+export async function releaseDigestDay(id: string): Promise<void> {
+  const supabase = db()
+  const { error } = await supabase.from('screener_digest_sends').delete().eq('id', id)
+  if (error) console.error(`[digest] could not release claimed day ${id}: ${error.message}`)
+}
+
 export async function recordDigestSend(
   id: string,
   recipientCount: number,
