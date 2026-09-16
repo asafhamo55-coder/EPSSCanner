@@ -113,6 +113,21 @@ export async function GET(req: NextRequest) {
   }
 
   const force = req.nextUrl.searchParams.get('force') === '1'
+  // `now=1` waives ONLY the clock guard: the real subscriber list, the day
+  // claim and the recorded send all behave exactly as on a cron run. It exists
+  // because a missed or failed cron would otherwise have no recovery path —
+  // the next eligible fire is 24 hours away, and by then the picks are stale.
+  //
+  // It is safe to expose because it does not waive the thing that actually
+  // matters: `claimDigestDay` still runs, so a second call the same Eastern day
+  // is refused whether it came from a human, a retry or the cron. The clock
+  // guard decides WHEN the digest may go out; the claim decides HOW OFTEN. Only
+  // the former is waived here.
+  //
+  // `force=1` is the opposite trade and must not be confused with it: force
+  // waives the clock AND the claim, but redirects delivery to DIGEST_TEST_EMAIL
+  // so the list is never touched. force is for testing; now is for sending.
+  const sendNow = req.nextUrl.searchParams.get('now') === '1'
   const now = new Date()
   const today = easternDate(now)
 
@@ -122,7 +137,7 @@ export async function GET(req: NextRequest) {
   //    it absorbs DST without code changes, tolerates a late-firing cron, and
   //    keeps the Pro two-fire schedule working unchanged if this ever upgrades.
   //    Sending twice is prevented by the day-claim below, not by this guard.
-  if (!force) {
+  if (!force && !sendNow) {
     const hour = easternHour(now)
     if (hour !== 6 && hour !== 7) {
       return NextResponse.json({ ok: true, skipped: 'off-hour', easternHour: hour })
@@ -231,6 +246,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({
         ok: true,
         force,
+        sendNow,
         sentOn: today,
         refreshed,
         considered: selection.considered,
