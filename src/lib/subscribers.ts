@@ -143,6 +143,24 @@ export async function unsubscribeByToken(token: string): Promise<boolean> {
   return (data ?? []).length > 0
 }
 
+/** Everyone still awaiting confirmation.
+ *
+ *  Exists for delivery-outage recovery: if the confirmation mail could not be
+ *  delivered (an unverified sending domain, a provider outage), these people
+ *  registered in good faith and are stranded — they never receive a digest,
+ *  and nothing in the normal flow retries for them. The resend-pending route
+ *  walks this list. Oldest first, so the longest-stranded are retried first. */
+export async function listPending(): Promise<Subscriber[]> {
+  const supabase = db()
+  const { data, error } = await supabase
+    .from('screener_subscribers')
+    .select('*')
+    .eq('status', 'pending')
+    .order('created_at', { ascending: true })
+  if (error) throw new Error(error.message)
+  return (data ?? []).map((r) => toSubscriber(r as Row))
+}
+
 export async function listConfirmed(): Promise<Subscriber[]> {
   const supabase = db()
   const { data, error } = await supabase
