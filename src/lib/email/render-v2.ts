@@ -22,7 +22,7 @@
 
 import type { PriceRange } from '@/lib/derive'
 import { bigUsd, marginPct, num, pct, ratio, usd } from '@/lib/format'
-import { MAX_PICKS, MIN_MARKET_CAP, MIN_SCORE } from '@/lib/score'
+import { deriveLevels, MAX_PICKS, MIN_MARKET_CAP, MIN_SCORE } from '@/lib/score'
 import type { SignalState } from '@/lib/signals'
 import type { Commentary } from '@/lib/ai/commentary'
 import type { IndexCardData } from '@/market-data/indices'
@@ -80,6 +80,12 @@ function cardV2(p: DigestPick, rank: number, siteUrl: string, commentary: Commen
   const reasons = 'reasons' in p && p.reasons ? p.reasons : []
   const positionPct = 'positionPct' in p ? p.positionPct : null
   const retracement = 'retracement' in p ? p.retracement : null
+  // The persisted (prep) path reads `levels` straight off the record; the
+  // in-memory fallback path (a freshly-scored ScoredPick, never persisted)
+  // still has the full `input.technicals` live, so it derives the same shape
+  // on the fly with the identical helper `toDigestPickRecord` uses — the two
+  // paths can't drift into different projections of the same Technicals.
+  const levels = 'input' in p ? deriveLevels(p.input.technicals) : p.levels
   const yoyState: SignalState | undefined = 'input' in p ? p.input.yoyState : p.yoyState
   const ntmState: SignalState | undefined = 'input' in p ? p.input.ntmState : p.ntmState
   const yoyTone = yoyState ? chipTone(yoyState) : valueTone(p.yoyPct)
@@ -212,6 +218,7 @@ function cardV2(p: DigestPick, rank: number, siteUrl: string, commentary: Commen
           positionPct,
           retracement,
           fullRange,
+          levels,
         })}
       </td>
     </tr>

@@ -410,6 +410,77 @@ export function toPick(e: Evaluation): ScoredPick {
   }
 }
 
+/** A pick's technical price levels, projected from `Technicals` for the ~15
+ *  numbers a trader actually reads off a chart — channel rail prices, the Fib
+ *  ladder's price levels, the nearest open gaps, and the 150-day SMA's own
+ *  price (not just the percent distance from it). Deliberately NOT the same
+ *  exclusion as `input.technicals` itself: that field is excluded from
+ *  persistence because it carries the full 126-bar OHLC series plus four
+ *  126-point derived series (~30–60KB/pick); this is a small fixed-size
+ *  summary computed FROM it, cheap enough to persist next to the rest of
+ *  `DigestPickRecord`. Null end-to-end when `technicals` itself is null (no
+ *  bars, or too short a history) — never partially fabricated. */
+export interface DigestPickLevels {
+  /** Regression-channel rails at the last visible bar, as prices. */
+  channelUpper: number | null
+  channelMid: number | null
+  channelLower: number | null
+  /** The 150-day SMA's own price (last visible value), enabling a dollar
+   *  distance from price, not just percent. */
+  sma150: number | null
+  /** The Fib ladder, each level with its actual price — empty (not null)
+   *  when there's no swing to anchor a retracement, so the renderer can tell
+   *  "no data yet" (null `levels`) from "computed, but no Fib" (empty array)
+   *  and degrade the two independently. */
+  fib: Array<{ ratio: number; price: number }>
+  /** Open gaps nearest the last close, capped at 3 — a name with a dozen
+   *  unfilled gaps should not produce a dozen email rows. */
+  gaps: Array<{
+    top: number
+    bottom: number
+    pct: number
+    direction: 'up' | 'down'
+    side: 'above' | 'below'
+  }>
+}
+
+/** Pulls `DigestPickLevels` out of a `Technicals` reading, the one place this
+ *  ~15-number summary is computed so the persisted path (`toDigestPickRecord`,
+ *  which discards `input.technicals` right after) and the in-memory fallback
+ *  path (a freshly-scored `ScoredPick`, which still has `input.technicals`
+ *  live) can both call this instead of drifting into two derivations. */
+export function deriveLevels(technicals: Technicals | null): DigestPickLevels | null {
+  if (!technicals) return null
+  const { channel, fib, gaps, sma150: smaSeries, visible } = technicals
+
+  const channelUpper = channel ? (channel.upper[channel.upper.length - 1] ?? null) : null
+  const channelMid = channel ? (channel.mid[channel.mid.length - 1] ?? null) : null
+  const channelLower = channel ? (channel.lower[channel.lower.length - 1] ?? null) : null
+
+  let sma150: number | null = null
+  for (let i = smaSeries.length - 1; i >= 0; i--) {
+    if (smaSeries[i] != null) {
+      sma150 = smaSeries[i]
+      break
+    }
+  }
+
+  const fibLevels = fib ? fib.levels.map((l) => ({ ratio: l.ratio, price: l.price })) : []
+
+  const lastClose = visible.length > 0 ? visible[visible.length - 1].c : null
+  const nearestGaps = [...gaps]
+    .sort((a, b) => {
+      if (lastClose == null) return 0
+      const da = Math.abs((a.top + a.bottom) / 2 - lastClose)
+      const db = Math.abs((b.top + b.bottom) / 2 - lastClose)
+      return da - db
+    })
+    .slice(0, 3)
+    .map((g) => ({ top: g.top, bottom: g.bottom, pct: g.pct, direction: g.direction, side: g.side }))
+
+  return { channelUpper, channelMid, channelLower, sma150, fib: fibLevels, gaps: nearestGaps }
+}
+
 /** Compact projection of a ScoredPick for persistence (screener_digest_sends.
  *  picks, and — since Task 7 — screener_digest_prep.picks, both jsonb
  *  columns). Deliberately excludes `input.technicals` — 126 OHLC bars plus
@@ -436,8 +507,13 @@ export function toPick(e: Evaluation): ScoredPick {
  *  short strings/enums/small numbers, nothing like the technicals blob this
  *  projection exists to exclude. Still excluded: `gates`, `passedGates` and
  *  `input` itself (beyond the two states pulled out below) — the prepared
- *  email doesn't need them, and `input.technicals` is exactly the payload
- *  this type exists to keep out. */
+ *  email doesn't need them, and the full `input.technicals` (126 OHLC bars
+ *  plus four 126-point series) is exactly the payload this type exists to
+ *  keep out. `levels` (added in the v2 email's fix round 1) is the one
+ *  deliberate exception: a small FIXED-SIZE summary of ~15 numbers computed
+ *  FROM `input.technicals` — channel rails, the Fib ladder's prices, the
+ *  SMA-150 price, up to 3 gaps — not the blob itself. See
+ *  `DigestPickLevels`/`deriveLevels` just above. */
 export interface DigestPickRecord {
   symbol: string
   name: string | null
@@ -471,6 +547,10 @@ export interface DigestPickRecord {
    *  alone) — the renderer's "Cleared every entry gate." fallback covers
    *  that case, not a missing-field one. */
   reasons: string[]
+  /** Channel rails, Fib ladder, nearest gaps and the SMA-150 price — see
+   *  `DigestPickLevels`. Null when `input.technicals` was null (short/missing
+   *  history), independent of every other field on this record. */
+  levels: DigestPickLevels | null
 }
 
 export function toDigestPickRecord(p: ScoredPick): DigestPickRecord {
@@ -503,6 +583,7 @@ export function toDigestPickRecord(p: ScoredPick): DigestPickRecord {
     change1mPct: p.change1mPct ?? null,
     fullRange: p.fullRange ?? null,
     reasons: p.reasons,
+    levels: deriveLevels(p.input.technicals),
   }
 }
 

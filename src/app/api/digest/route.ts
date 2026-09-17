@@ -5,7 +5,9 @@ import { buildSelection, readPrep } from '@/lib/digest'
 import type { Selection } from '@/lib/score'
 import { toDigestPickRecord } from '@/lib/score'
 import { renderDigest, type DigestSelection } from '@/lib/email/render'
+import type { DigestDataV2 } from '@/lib/email/render-v2'
 import type { Commentary } from '@/lib/ai/commentary'
+import { getIndices } from '@/market-data/indices'
 import { sendEmails, type EmailMessage } from '@/lib/email/send'
 import {
   claimDigestDay,
@@ -274,6 +276,18 @@ export async function GET(req: NextRequest) {
       const origin = siteUrl()
       const asOfLabel = easternLabel(now)
 
+      // Header index strip data. Same source preparation used to build the AI
+      // payload (src/lib/digest.ts), already warm behind `unstable_cache`
+      // (['key-indices-v1'], 15 min) by the time this route runs 90+ minutes
+      // later — this is expected to be a cache hit, not a fresh Yahoo
+      // round-trip. Never allowed to fail the send: an empty array here just
+      // means renderDigestV2's index strip renders nothing, same as any other
+      // degraded path in this pipeline.
+      const indices = await getIndices().catch((e) => {
+        console.error(`[digest] indices failed: ${(e as Error).message}`)
+        return []
+      })
+
       // 5. Send.
       const recipients = force
         ? (() => {
@@ -289,13 +303,22 @@ export async function GET(req: NextRequest) {
           }))
 
       const messages: EmailMessage[] = recipients.map((r) => {
-        const mail = renderDigest({
+        // Typed as `DigestDataV2` (a strict superset of `DigestData`, defined
+        // in render-v2.ts) rather than as a fresh object literal against
+        // `renderDigest`'s `DigestData` parameter type — that's what lets
+        // `indices` ride along here without widening `DigestData` itself,
+        // which lives in render.ts and is out of this task's file list.
+        // `renderDigest` (still v1-only until the DIGEST_TEMPLATE dispatcher
+        // lands) simply ignores the extra field today; v2 reads it.
+        const mailData: DigestDataV2 = {
           recipient: { firstName: r.firstName, unsubscribeToken: r.unsubscribeToken },
           selection,
           asOfLabel,
           siteUrl: origin,
           commentary,
-        })
+          indices,
+        }
+        const mail = renderDigest(mailData)
         const unsub = `${origin}/api/subscribe/unsubscribe?token=${encodeURIComponent(r.unsubscribeToken)}`
         return {
           to: r.email,

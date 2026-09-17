@@ -30,6 +30,7 @@ import type { PriceRange } from '@/lib/derive'
 import type { IndexCardData } from '@/market-data/indices'
 import { num, pct, usd } from '@/lib/format'
 import { SMA_ZERO_AT_PCT } from '@/lib/score'
+import type { DigestPickLevels } from '@/lib/score'
 import { bar, escapeHtml, FONT, goldenBand, markerBar, PALETTE } from './primitives'
 
 /** Where the "vs 150-day SMA" marker sits on its track — the same domain
@@ -143,49 +144,104 @@ export function metricsGrid(blocks: readonly [MetricBlock, MetricBlock, MetricBl
 
 // ─── Technical levels ──────────────────────────────────────────────
 // Spec §7 asks for "channel rails as prices, the Fib ladder with prices,
-// unfilled gaps, SMA-150 distance in both percent and dollars". Only the
-// last of those four is achievable from a `PrepPickRecord`: the raw channel
-// rail prices, the Fib ladder's price levels and the open-gap list live only
-// on `Technicals` (input.technicals), which `toDigestPickRecord` deliberately
-// excludes from persistence (the ~27KB-per-pick payload score.ts's own
-// comment calls out) — so a pick reaching this renderer never carries them.
-// What IS on the record: `vsSma150Pct` (percent only — no raw sma150 price),
-// `positionPct` (percent up the regression channel, no rail prices),
-// `retracement` (the Fib ratio, no swing-price levels) and `fullRange`
-// (actual 52-week high/low prices, since Task 1 added it as its own field).
-// This panel renders exactly that: a real 52-week price range from
-// `fullRange`, and a percent-AND-dollar SMA-150 reading — the dollar figure
-// isn't persisted either, but it's recoverable without a new field, by
-// inverting vsSma150Pct's own formula (see derive.ts): if
-// vsSma150Pct = (price − sma150) / sma150 × 100, then
-// sma150 = price / (1 + vsSma150Pct/100), and the dollar gap follows. Tunnel
-// position and the golden-zone band reuse v1's own `bar`/`goldenBand`
-// primitives unchanged — the "deterministic factor breakdown, retained from
-// v1" spec §7 asks for, not a redraw.
+// unfilled gaps, SMA-150 distance in both percent and dollars". As of the v2
+// template's fix round 1, `DigestPickRecord.levels` (score.ts's
+// `deriveLevels`) persists exactly that — channel rail prices, the Fib
+// ladder's price levels, the nearest open gaps and the SMA-150's own price —
+// so all four are reachable here now, not just the percent-only readings
+// (`vsSma150Pct`, `positionPct`, `retracement`) and `fullRange` that were all
+// this panel could show before. `levels` is still null end-to-end when
+// `input.technicals` itself was null (short/missing history) — every
+// sub-block below degrades independently on that, exactly as the fix round
+// asked: a pick with no Fib anchor still shows its rails, and vice versa.
+// Tunnel position and the golden-zone band still reuse v1's own
+// `bar`/`goldenBand` primitives unchanged — the "deterministic factor
+// breakdown, retained from v1" spec §7 asks for, not a redraw.
+//
+// No NEW colour pair is introduced by this block: rail/Fib/gap prices use
+// `ink` on `surface` (17.85:1, already shipped elsewhere in this file), the
+// two golden-zone Fib rows (0.5/0.618) reuse `goldInk` on `surface` — the
+// exact pair primitives.ts's own `goldenBand` already ships at 5.02:1 — and
+// every label stays on `muted` on `surface` (4.76:1). Nothing here sits on a
+// tinted background, so the `canvas`/`infoSoft` failure modes documented at
+// the top of this file don't apply.
 export function technicalLevels(opts: {
   price: number | null
   vsSma150Pct: number | null
   positionPct: number | null
   retracement: number | null
   fullRange: PriceRange | null
+  levels: DigestPickLevels | null
 }): string {
-  const smaDollar =
-    opts.price != null && opts.vsSma150Pct != null && Number.isFinite(opts.vsSma150Pct)
-      ? (opts.price * (opts.vsSma150Pct / 100)) / (1 + opts.vsSma150Pct / 100)
-      : null
+  const l = opts.levels
+
   const rangeValue = opts.fullRange
     ? `${escapeHtml(usd(opts.fullRange.low))} – ${escapeHtml(usd(opts.fullRange.high))}`
     : '—'
   const rangeSub = opts.fullRange
     ? `${escapeHtml(pct(opts.fullRange.pctFromLow, 1))} from low · ${escapeHtml(pct(opts.fullRange.pctFromHigh, 1))} from high`
     : ''
-  // The dollar delta has nowhere to sit inside markerBar's fixed slots
-  // (label / value / two axis caps), so it rides as a small caption under the
-  // gauge instead of replacing the percent value markerBar already shows.
+
+  // Channel rails degrade on their own — a name too short for a regression
+  // channel (< MIN_CHANNEL_BARS in technicals.ts) still gets everything else
+  // in this panel, per the fix round's "degrade each sub-row independently".
+  const hasRails = l != null && (l.channelUpper != null || l.channelMid != null || l.channelLower != null)
+  const railsRow = hasRails
+    ? `<tr>
+          <td style="font:400 11px ${FONT};color:${PALETTE.muted};padding:2px 0;">Channel rails (upper · mid · lower)</td>
+          <td align="right" style="font:700 12px ${FONT};color:${PALETTE.ink};padding:2px 0;font-variant-numeric:tabular-nums;">${escapeHtml(usd(l!.channelUpper))} · ${escapeHtml(usd(l!.channelMid))} · ${escapeHtml(usd(l!.channelLower))}</td>
+        </tr>`
+    : ''
+
+  // SMA-150 dollar distance: prefer the real persisted price (`levels.sma150`)
+  // — precise, no inversion needed. Falls back to inverting vsSma150Pct's own
+  // formula (sma150 = price / (1 + vsSma150Pct/100), from derive.ts) only
+  // when `levels` is null but the percent still persisted — `vsSma150Pct` is
+  // computed from a separate `sma150` field on ScoreInput, independent of
+  // `technicals`, so it can be present even when `levels` is not.
+  const smaPrice = l?.sma150 ?? null
+  const smaDollar =
+    smaPrice != null && opts.price != null
+      ? opts.price - smaPrice
+      : opts.price != null && opts.vsSma150Pct != null && Number.isFinite(opts.vsSma150Pct)
+        ? (opts.price * (opts.vsSma150Pct / 100)) / (1 + opts.vsSma150Pct / 100)
+        : null
   const smaCaption =
     smaDollar != null
-      ? `${smaDollar >= 0 ? '+' : '−'}${escapeHtml(usd(Math.abs(smaDollar)))} vs the 150-day average`
+      ? `${smaDollar >= 0 ? '+' : '−'}${escapeHtml(usd(Math.abs(smaDollar)))} vs the 150-day average${smaPrice != null ? ` (${escapeHtml(usd(smaPrice))})` : ''}`
       : ''
+
+  // Fib ladder: each level with its real price, the two golden-zone rungs
+  // (0.5/0.618 — the same band goldenBand highlights below) picked out in
+  // goldInk. Empty array (computed, no swing) renders nothing, same as null
+  // (never computed) — the renderer doesn't need to tell those apart.
+  const fibRows = l && l.fib.length
+    ? l.fib
+        .map((f) => {
+          const inGolden = f.ratio >= 0.5 && f.ratio <= 0.618
+          return `<tr>
+          <td style="font:400 11px ${FONT};color:${PALETTE.muted};padding:2px 0;">${inGolden ? '⭐ ' : ''}${(f.ratio * 100).toFixed(1)}% Fib</td>
+          <td align="right" style="font:700 12px ${FONT};color:${inGolden ? PALETTE.goldInk : PALETTE.ink};padding:2px 0;font-variant-numeric:tabular-nums;">${escapeHtml(usd(f.price))}</td>
+        </tr>`
+        })
+        .join('')
+    : ''
+
+  // Nearest open gaps (already capped at 3 by deriveLevels). Gap size is a
+  // magnitude, not a signed delta, so it's rendered with a plain `%` suffix
+  // rather than format.ts's `pct()`, which would prepend a misleading '+'.
+  const gapRows = l && l.gaps.length
+    ? l.gaps
+        .map((g) => {
+          const arrow = g.direction === 'up' ? '↑' : '↓'
+          return `<tr>
+          <td style="font:400 11px ${FONT};color:${PALETTE.muted};padding:2px 0;">${arrow} Gap ${escapeHtml(g.side)}</td>
+          <td align="right" style="font:700 12px ${FONT};color:${PALETTE.ink};padding:2px 0;font-variant-numeric:tabular-nums;">${escapeHtml(usd(g.bottom))}–${escapeHtml(usd(g.top))} <span style="color:${PALETTE.muted};font-weight:400;">(${g.pct.toFixed(1)}%)</span></td>
+        </tr>`
+        })
+        .join('')
+    : ''
+
   const positionPct = opts.positionPct
   const clamped = positionPct == null ? null : Math.max(0, Math.min(100, positionPct))
 
@@ -200,6 +256,7 @@ export function technicalLevels(opts: {
           <td align="right" style="font:700 12px ${FONT};color:${PALETTE.ink};padding:2px 0;font-variant-numeric:tabular-nums;">${rangeValue}</td>
         </tr>
         ${rangeSub ? `<tr><td colspan="2" align="right" style="font:400 10px ${FONT};color:${PALETTE.muted};padding:0 0 4px 0;">${rangeSub}</td></tr>` : ''}
+        ${railsRow}
       </table>
     </td>
   </tr>
@@ -227,6 +284,26 @@ export function technicalLevels(opts: {
       ${goldenBand({ ratio: opts.retracement })}
     </td>
   </tr>
+  ${
+    fibRows
+      ? `<tr><td style="padding:0 12px 8px 12px;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+        <tr><td colspan="2" style="font:700 10px ${FONT};color:${PALETTE.muted};padding:0 0 3px 0;text-transform:uppercase;letter-spacing:0.04em;">Fib ladder</td></tr>
+        ${fibRows}
+      </table>
+    </td></tr>`
+      : ''
+  }
+  ${
+    gapRows
+      ? `<tr><td style="padding:0 12px 10px 12px;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+        <tr><td colspan="2" style="font:700 10px ${FONT};color:${PALETTE.muted};padding:0 0 3px 0;text-transform:uppercase;letter-spacing:0.04em;">Nearby gaps</td></tr>
+        ${gapRows}
+      </table>
+    </td></tr>`
+      : ''
+  }
 </table>`
 }
 
