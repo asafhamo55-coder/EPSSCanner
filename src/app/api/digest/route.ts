@@ -2,10 +2,10 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { ingestAllActive } from '@/lib/ingest'
 import { publish } from '@/lib/publish'
 import { buildSelection, readPrep } from '@/lib/digest'
-import type { Selection } from '@/lib/score'
+import type { ScoredPick, Selection } from '@/lib/score'
 import { toDigestPickRecord } from '@/lib/score'
 import { renderDigest, type DigestData, type DigestSelection } from '@/lib/email/render'
-import type { Commentary } from '@/lib/market-read'
+import { buildMarketRead, type Commentary } from '@/lib/market-read'
 import { getIndices, type IndexCardData } from '@/market-data/indices'
 import { sendEmails, type EmailMessage } from '@/lib/email/send'
 import {
@@ -229,7 +229,8 @@ export async function GET(req: NextRequest) {
       // failed) simply isn't returned.
       //
       // Fallback path: no row for today — score inline exactly as v1 did.
-      // No charts, no commentary, but the digest still goes out. This is the
+      // No charts, but the market read is composed here too (see below) and
+      // the digest still goes out. This is the
       // expected state on the first deploy, after a failed ingest, or any
       // day the screener_digest_prep migration hasn't been applied yet — NOT
       // an error.
@@ -256,6 +257,11 @@ export async function GET(req: NextRequest) {
       let selection: DigestSelection
       let pickRecords: unknown
       let commentary: Commentary | null = null
+      // Held for the fallback path only: buildMarketRead needs the full
+      // ScoredPick objects, and the indices it also needs are not fetched
+      // until after this block. On the prepared path the read was already
+      // composed during preparation and read back off the row.
+      let inlinePicks: ScoredPick[] | null = null
       if (usingPrep && prep) {
         selection = { picks: prep.picks, considered: prep.considered, belowCutoff: prep.belowCutoff }
         pickRecords = prep.picks
@@ -268,9 +274,8 @@ export async function GET(req: NextRequest) {
         const built = await buildSelection()
         selection = built
         pickRecords = built.picks.map(toDigestPickRecord)
-        console.log(
-          `[digest] ${today}: no prepared row — scoring inline (no charts, no commentary)`,
-        )
+        inlinePicks = built.picks
+        console.log(`[digest] ${today}: no prepared row — scoring inline (no charts)`)
       }
       // publish() invalidates the 'yahoo-live' cache tag (SMA/ATH/PEG/technicals)
       // that buildSelection() reads on the fallback path above. Calling it
@@ -320,6 +325,18 @@ export async function GET(req: NextRequest) {
       ]).finally(() => {
         if (indicesTimer) clearTimeout(indicesTimer)
       })
+
+      // The fallback path composes its own market read. It could not do this
+      // when the read came from a paid API call — the point of the fallback
+      // is that it runs when preparation did NOT, so spending money and a
+      // multi-second round trip inside the send window was not an option.
+      // buildMarketRead is pure, synchronous and free, so that objection is
+      // gone: the only input it needs beyond the picks is `indices`, which
+      // this route already fetched just above for the header strip. The
+      // fallback now degrades in charts alone, not charts AND prose.
+      if (!usingPrep && inlinePicks) {
+        commentary = buildMarketRead(inlinePicks, indices)
+      }
 
       // 5. Send.
       const recipients = force
