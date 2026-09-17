@@ -15,8 +15,8 @@ import {
 } from './score'
 import { renderChart } from './chart/render'
 import { pruneCharts, uploadChart } from './chart/store'
-import { generateCommentary } from './ai/commentary'
-import { getIndices } from '@/market-data/indices'
+import { buildMarketRead } from './market-read'
+import { getIndices, type IndexCardData } from '@/market-data/indices'
 import { db } from './db'
 
 /** Trading-day lookbacks for the carried momentum fields — 1 day, 1 trading
@@ -129,8 +129,8 @@ export const getCachedSelection = unstable_cache(buildSelection, ['digest-select
 
 // ─── Preparation phase (Task 6) ─────────────────────────────────────
 //
-// The expensive half of the digest — scoring, chart rendering, and the one
-// Claude call — runs inside the 09:30 UTC ingest cron and lands in
+// The expensive half of the digest — scoring and chart rendering — runs
+// inside the 09:30 UTC ingest cron and lands in
 // screener_digest_prep. The 11:00 UTC digest cron reads that row and only
 // renders and sends, which is the only way both fit inside Vercel Hobby's
 // 60s-per-function ceiling. See supabase/migrations/0030_digest_prep.sql.
@@ -157,26 +157,26 @@ const CHART_CONCURRENCY = 4
  *  What this actually bounds: `renderCharts` stops STARTING new charts once
  *  this deadline passes (a chart already in flight can still run past it —
  *  see the note on `renderCharts`), and the remaining time after charts,
- *  minus `UPSERT_RESERVE_MS`, is what the AI stage below is raced against.
+ *  minus `UPSERT_RESERVE_MS`, is what the index fetch below is raced
+ *  against.
  *  It does not bound the upsert itself, which is why time is reserved for
  *  it rather than raced. */
 const PREP_BUDGET_MS = 25_000
 
 /** Reserved off the end of PREP_BUDGET_MS so the upsert always has time to
  *  run after everything above it. A persisted partial row — whatever charts
- *  and/or AI commentary finished before the clock ran out — is the entire
- *  point of this phase's degrade-don't-fail design; that design is broken if
- *  the AI stage is allowed to eat the deadline down to zero and leave
- *  nothing for the write that actually persists the day's work. */
+ *  finished before the clock ran out — is the entire point of this phase's
+ *  degrade-don't-fail design; that design is broken if the index fetch is
+ *  allowed to eat the deadline down to zero and leave nothing for the write
+ *  that actually persists the day's work. */
 const UPSERT_RESERVE_MS = 4_000
 
-/** Below this much remaining budget, attempting AI commentary is not
- *  worthwhile — fetching indices and running the Claude call cannot usefully
- *  complete in less time than this, so preparation skips straight to the
- *  upsert with `ai_ok: false` rather than gambling the reserve away. A
- *  skipped commentary is a degraded email; racing a call that never had a
- *  real chance just delays reaching the write below. */
-const AI_MIN_MS = 8_000
+/** Below this much remaining budget, fetching indices is not worthwhile —
+ *  the fan-out cannot usefully complete in less time than this, so
+ *  preparation composes the market read without its index sentence and goes
+ *  straight to the upsert rather than gambling the reserve away. Racing a
+ *  fetch that never had a real chance just delays reaching the write. */
+const INDICES_MIN_MS = 6_000
 
 /** How many days of chart folders `pruneCharts` keeps — matches the figure
  *  README.md's "public chart bucket" section already documents
@@ -227,7 +227,7 @@ export interface PrepResult {
   ok: boolean
   picks: number
   chartsRendered: number
-  aiOk: boolean
+  readOk: boolean
 }
 
 export interface Prep {
@@ -236,7 +236,7 @@ export interface Prep {
   marketRead: string | null
   perStock: Record<string, string>
   chartCount: number
-  aiOk: boolean
+  readOk: boolean
   /** How many watchlist names buildSelection() considered, and how many
    *  cleared every gate but fell below MIN_SCORE — see Selection. Both null
    *  for a row written before migration 0031 added the columns (the jsonb
@@ -250,8 +250,9 @@ export interface Prep {
 
 /** Runs the full preparation phase for one Eastern calendar date and upserts
  *  the result to screener_digest_prep, keyed on `prepOn`. Order: check for an
- *  already-complete row → score → render and upload a chart per pick → one
- *  Claude commentary call → upsert. Each stage after scoring is
+ *  already-complete row → score → render and upload a chart per pick →
+ *  fetch indices and compose the market read → upsert. Each stage after
+ *  scoring is
  *  independently best-effort so a later failure still persists whatever the
  *  earlier stages produced — the digest cron should always have a row to
  *  read, even a degraded one.
@@ -263,17 +264,16 @@ export async function prepareDigest(prepOn: string): Promise<PrepResult> {
   // Idempotent for the day. The upsert at the end of this function OVERWRITES
   // screener_digest_prep (`onConflict: 'prep_on'`), so without this early
   // return a retried or duplicated invocation for the same Eastern date would
-  // silently redo the expensive half of this phase — re-render every chart,
-  // re-upload each PNG, and re-run the one paid `claude-opus-5` call — purely
-  // to overwrite a row that already has that exact content. A prior row only
-  // counts as "done" when it actually has picks AND the AI stage completed
-  // (`ai_ok`); a prior degraded run (e.g. it lost the AI race, or timed out
-  // before charts finished) is deliberately NOT treated as done, so a retry
-  // can still improve on it rather than freezing today's row at its worst
-  // outcome.
+  // silently redo the expensive half of this phase — re-render every chart
+  // and re-upload each PNG — purely to overwrite a row that already has that
+  // exact content. A prior row only counts as "done" when it actually has
+  // picks AND a market read was composed; a prior degraded run (e.g. it
+  // timed out before charts finished) is deliberately NOT treated as done,
+  // so a retry can still improve on it rather than freezing today's row at
+  // its worst outcome.
   const existing = await readPrep(prepOn)
-  if (existing && existing.picks.length > 0 && existing.aiOk) {
-    return { ok: true, picks: existing.picks.length, chartsRendered: existing.chartCount, aiOk: existing.aiOk }
+  if (existing && existing.picks.length > 0 && existing.readOk) {
+    return { ok: true, picks: existing.picks.length, chartsRendered: existing.chartCount, readOk: existing.readOk }
   }
 
   const deadline = Date.now() + PREP_BUDGET_MS
@@ -285,59 +285,59 @@ export async function prepareDigest(prepOn: string): Promise<PrepResult> {
     return 0
   })
 
-  // Budget left for the AI stage, with UPSERT_RESERVE_MS carved out so the
+  // Budget left for the index fetch, with UPSERT_RESERVE_MS carved out so the
   // write below always has time to run — see PREP_BUDGET_MS/UPSERT_RESERVE_MS.
   // Can be small or negative if chart rendering ran long (a chart already in
   // flight when renderCharts' own deadline passed is not aborted — see the
   // note there); either way this check is what keeps that from eating the
   // reserve.
-  const aiBudgetMs = deadline - Date.now() - UPSERT_RESERVE_MS
-  let commentary: Awaited<ReturnType<typeof generateCommentary>> = null
-  if (aiBudgetMs < AI_MIN_MS) {
+  //
+  // Indices are the only network call left in this phase. Composing the
+  // market read itself is synchronous, total, and free — see buildMarketRead
+  // — so the only thing that can go wrong here is the fetch, and the only
+  // cost of it going wrong is a market read without its index sentence.
+  const indicesBudgetMs = deadline - Date.now() - UPSERT_RESERVE_MS
+  let indices: IndexCardData[] = []
+  if (indicesBudgetMs < INDICES_MIN_MS) {
     console.warn(
-      `[prep] skipping AI commentary — ${Math.max(aiBudgetMs, 0)}ms left of budget, need at least ${AI_MIN_MS}ms`,
+      `[prep] skipping indices — ${Math.max(indicesBudgetMs, 0)}ms left of budget, need at least ${INDICES_MIN_MS}ms`,
     )
   } else {
     // A platform kill at maxDuration is NOT a rejected promise a .catch() can
     // see — the process dies mid-flight, the upsert below never runs, and a
     // day whose charts already rendered successfully would persist nothing
     // at all. Racing against a timer we control means WE decide the failure
-    // instead of the platform: losing the race resolves to null and the row
+    // instead of the platform: losing the race resolves to [] and the row
     // still gets written, degraded; losing the function loses the whole day.
     // Same pattern, same reasoning, as TECHNICALS_TIMEOUT_MS in
     // src/app/actions.ts.
     //
-    // This does NOT abort the underlying Yahoo/Anthropic HTTP requests — it
-    // only stops THIS function from waiting on them. That's sufficient:
-    // once prepareDigest returns, the runtime tears the request down
-    // regardless. Do not "improve" this into an AbortController — that
-    // changes what is being raced (the request) rather than how long this
-    // function waits for it, which is not the failure mode being guarded
-    // against here.
+    // This does NOT abort the underlying Yahoo requests — it only stops THIS
+    // function from waiting on them. That's sufficient: once prepareDigest
+    // returns, the runtime tears the request down regardless. Do not
+    // "improve" this into an AbortController — that changes what is being
+    // raced (the request) rather than how long this function waits for it,
+    // which is not the failure mode being guarded against here.
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
-      commentary = await Promise.race([
-        (async () => {
-          const indices = await getIndices().catch((e) => {
-            console.error(`[prep] indices failed: ${(e as Error).message}`)
-            return []
-          })
-          return generateCommentary(selection.picks, indices)
-        })().catch((e) => {
-          console.error(`[prep] commentary threw: ${(e as Error).message}`)
-          return null
+      indices = await Promise.race([
+        getIndices().catch((e) => {
+          console.error(`[prep] indices failed: ${(e as Error).message}`)
+          return [] as IndexCardData[]
         }),
-        new Promise<null>((resolve) => {
+        new Promise<IndexCardData[]>((resolve) => {
           timer = setTimeout(() => {
-            console.warn(`[prep] AI commentary timed out after ${aiBudgetMs}ms`)
-            resolve(null)
-          }, aiBudgetMs)
+            console.warn(`[prep] indices timed out after ${indicesBudgetMs}ms`)
+            resolve([])
+          }, indicesBudgetMs)
         }),
       ])
     } finally {
       if (timer) clearTimeout(timer)
     }
   }
+
+  const commentary = buildMarketRead(selection.picks, indices)
 
   const records: PrepPickRecord[] = selection.picks.map((p) => ({
     ...toDigestPickRecord(p),
@@ -353,6 +353,13 @@ export async function prepareDigest(prepOn: string): Promise<PrepResult> {
         market_read: commentary?.marketRead ?? null,
         per_stock: commentary?.perStock ?? null,
         chart_count: chartsRendered,
+        // Column name predates the removal of the Claude call: it now records
+        // "a market read was composed", which is what it always meant to the
+        // readers of this table. Renaming it would need its own migration
+        // applied strictly before the code that reads the new name, and a
+        // mis-ordered deploy there degrades the digest silently and
+        // permanently — not worth it for a name. `market_read IS NOT NULL`
+        // carries the identical signal for anyone querying directly.
         ai_ok: commentary != null,
         considered: selection.considered,
         below_cutoff: selection.belowCutoff,
@@ -361,11 +368,11 @@ export async function prepareDigest(prepOn: string): Promise<PrepResult> {
     )
     if (error) {
       console.error(`[prep] upsert failed: ${error.message}`)
-      return { ok: false, picks: selection.picks.length, chartsRendered, aiOk: commentary != null }
+      return { ok: false, picks: selection.picks.length, chartsRendered, readOk: commentary != null }
     }
   } catch (e) {
     console.error(`[prep] upsert threw: ${(e as Error).message}`)
-    return { ok: false, picks: selection.picks.length, chartsRendered, aiOk: commentary != null }
+    return { ok: false, picks: selection.picks.length, chartsRendered, readOk: commentary != null }
   }
 
   // Best-effort, AFTER the row above is safely written — pruneCharts itself
@@ -380,7 +387,7 @@ export async function prepareDigest(prepOn: string): Promise<PrepResult> {
     return 0
   })
 
-  return { ok: true, picks: selection.picks.length, chartsRendered, aiOk: commentary != null }
+  return { ok: true, picks: selection.picks.length, chartsRendered, readOk: commentary != null }
 }
 
 /** Reads back the preparation row for one Eastern calendar date, mapped to
@@ -407,7 +414,7 @@ export async function readPrep(prepOn: string): Promise<Prep | null> {
       marketRead: (r.market_read as string | null) ?? null,
       perStock: (r.per_stock as Record<string, string> | null) ?? {},
       chartCount: (r.chart_count as number | null) ?? 0,
-      aiOk: (r.ai_ok as boolean | null) ?? false,
+      readOk: (r.ai_ok as boolean | null) ?? false,
       considered: (r.considered as number | null) ?? null,
       belowCutoff: (r.below_cutoff as number | null) ?? null,
     }

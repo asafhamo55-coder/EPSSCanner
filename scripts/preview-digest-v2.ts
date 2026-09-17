@@ -32,12 +32,12 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { renderDigestV2 } from '../src/lib/email/render-v2'
 import { renderChart } from '../src/lib/chart/render'
-import { evaluate, toPick, type ScoreInput, type ScoredPick } from '../src/lib/score'
+import { evaluate, toPick, MIN_SCORE, type ScoreInput, type ScoredPick } from '../src/lib/score'
 import { analyze } from '../src/lib/technicals'
 import { priceChangePct } from '../src/lib/derive'
 import type { Bar } from '../src/market-data/provider'
 import type { IndexCardData } from '../src/market-data/indices'
-import type { Commentary } from '../src/lib/ai/commentary'
+import { buildMarketRead } from '../src/lib/market-read'
 
 // ─── Deterministic synthetic price series ───────────────────────────
 // xorshift32, not Math.random(): the whole point of a fixture is that it
@@ -290,10 +290,22 @@ const FIXTURE_INDICES: IndexCardData[] = [
 async function main() {
   mkdirSync('.preview', { recursive: true })
 
-  const picks = FIXTURES.map(buildPick).sort((a, b) => b.score - a.score)
+  // MIN_SCORE is applied here for the same reason selectPicks applies it in
+  // production: a preview that displays a sub-cutoff name is showing a state
+  // subscribers can never receive, and the email's own header ("scored 50 or
+  // better") then contradicts the rows beneath it. Fixtures below the cutoff
+  // are kept in FIXTURES deliberately — they feed belowCutoff, which is what
+  // the header's "N more passed the gate but fell short on score" reports.
+  const scored = FIXTURES.map(buildPick).sort((a, b) => b.score - a.score)
+  const picks = scored.filter((p) => p.score >= MIN_SCORE)
+  const belowCutoff = scored.length - picks.length
 
   console.log('Fixture scores (rank, symbol, score):')
-  picks.forEach((p, i) => console.log(`  ${i + 1}. ${p.symbol} — ${p.score.toFixed(1)}/100`))
+  scored.forEach((p, i) =>
+    console.log(
+      `  ${i + 1}. ${p.symbol} — ${p.score.toFixed(1)}/100${p.score < MIN_SCORE ? '  (below cutoff — not shown)' : ''}`,
+    ),
+  )
 
   // ── File 1: real charts + fixture commentary ──────────────────────
   // Render and write a real chart PNG per pick, wiring chartUrl to a plain
@@ -310,22 +322,15 @@ async function main() {
     p.chartUrl = fileName
   }
 
-  const commentary: Commentary = {
-    marketRead:
-      'Large caps are grinding to fresh highs on firm breadth, while small caps lag as rate-cut ' +
-      'expectations get pushed out. Leadership stays concentrated in the same handful of megacap ' +
-      'growth names that have carried the tape all year.',
-    perStock: Object.fromEntries(
-      picks.map((p) => [
-        p.symbol,
-        `${p.symbol} is holding its trend structure with growth still accelerating into the next print.`,
-      ]),
-    ),
-  }
+  // Composed from the fixture picks themselves, not hand-written prose: the
+  // preview's whole job is to show what subscribers will actually receive,
+  // and buildMarketRead is deterministic, so a hand-written fixture here
+  // would be the one part of the page that is not the real output.
+  const commentary = buildMarketRead(picks, FIXTURE_INDICES)
 
   const full = renderDigestV2({
     recipient: { firstName: 'Asaf', unsubscribeToken: 'preview-token' },
-    selection: { picks, considered: 61, belowCutoff: 3 },
+    selection: { picks, considered: 61, belowCutoff },
     asOfLabel: 'Monday, 14 September 2026',
     siteUrl: 'https://tripleqgroup.vercel.app',
     indices: FIXTURE_INDICES,
@@ -338,19 +343,19 @@ async function main() {
   // ── File 2: the degraded path — no commentary, no chart URLs ──────
   // Same scored picks (so the technical-levels panel, metrics grid etc. are
   // still full and real), but chartUrl cleared and commentary null — proving
-  // the "AI market read" panel, the per-stock "AI read" panels and every
+  // the "Market read" panel, the per-stock "Read" panels and every
   // chart <img> all disappear cleanly rather than rendering broken or empty.
   const degradedPicks: ScoredPick[] = picks.map((p) => ({ ...p, chartUrl: null }))
   const degraded = renderDigestV2({
     recipient: { firstName: 'Asaf', unsubscribeToken: 'preview-token' },
-    selection: { picks: degradedPicks, considered: 61, belowCutoff: 3 },
+    selection: { picks: degradedPicks, considered: 61, belowCutoff },
     asOfLabel: 'Monday, 14 September 2026',
     siteUrl: 'https://tripleqgroup.vercel.app',
     indices: FIXTURE_INDICES,
     commentary: null,
   })
   writeFileSync('.preview/digest-v2-degraded.html', degraded.html)
-  console.log('wrote .preview/digest-v2-degraded.html — no charts, no AI commentary')
+  console.log('wrote .preview/digest-v2-degraded.html — no charts, no market read')
 }
 
 main().catch((err) => {

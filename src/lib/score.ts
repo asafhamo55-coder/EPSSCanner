@@ -81,7 +81,7 @@ export interface ScoreInput {
   technicals: Technicals | null
 
   // ── Carried context ───────────────────────────────────────────────
-  // Everything below is passed through to the renderer and the AI payload and
+  // Everything below is passed through to the renderer and the market read and
   // is deliberately NOT read by runGates or runFactors. Scoring on these would
   // silently change every historical ranking, so the invariance assertions in
   // scripts/test-signals.ts exist to catch exactly that.
@@ -337,7 +337,12 @@ export function runFactors(input: ScoreInput): FactorScore[] {
       label: 'Room below the high',
       points: drawdownPoints,
       max: WEIGHTS.drawdown,
-      detail: isNum(dd) ? `${dd.toFixed(1)}% below the all-time high` : 'no all-time high',
+      // Magnitude, not the signed value: `pctFromAth` is negative below the
+      // high, so interpolating it raw produced "-24.3% below the all-time
+      // high" — a double negative that reads as ABOVE the high. The words
+      // carry the direction here, the same convention src/lib/market-read.ts
+      // follows.
+      detail: isNum(dd) ? `${Math.abs(dd).toFixed(1)}% below the all-time high` : 'no all-time high',
     },
   ]
 }

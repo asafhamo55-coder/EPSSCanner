@@ -66,7 +66,7 @@ import {
   WEIGHTS,
   type ScoreInput,
 } from '../src/lib/score'
-import { buildPayload, isGrounded, numericTokens } from '../src/lib/ai/prompt'
+import { buildMarketRead } from '../src/lib/market-read'
 import { resolveTemplateOverride } from '../src/app/api/digest/resolve-template'
 
 let failures = 0
@@ -1218,175 +1218,137 @@ async function main() {
     'resolveTemplateOverride: neither force nor template set is undefined',
   )
 
-  // ── AI commentary — grounding guard ───────────────────────────────
-  console.log('\nAI commentary — grounding guard')
-  const perfectPickForPrompt = toPick(evaluate(perfect))
-  const gPayload = buildPayload(
-    [{ ...perfectPickForPrompt }],
-    [{ key: 'sp500', name: 'S&P 500', ytdPct: 12.4, trailingPe: 24.1, forwardPe: 21.0 }],
-  )
+  // ── Market read — composed from the picks' own figures ───────────
+  // The Claude call these tests used to guard is gone. What replaced it
+  // composes every sentence directly from ScoredPick/IndexCardData fields,
+  // so the property the old grounding guard CHECKED at runtime is now
+  // structural: a figure that is never generated cannot be fabricated.
+  // These tests pin the wording and the arithmetic instead.
+  console.log('\nMarket read — composed prose')
+  const mrPick = toPick(evaluate(perfect))
+  const mrIndices = [
+    { key: 'sp500', name: 'S&P 500', region: 'US', accent: 'sky' as const, ytdPct: 12.4, trailingPe: 24.1, forwardPe: 21.0, eps2026: '', eps2027: '', live: true },
+    { key: 'dow', name: 'Dow Jones', region: 'US', accent: 'sky' as const, ytdPct: -3.25, trailingPe: null, forwardPe: null, eps2026: '', eps2027: '', live: true },
+    { key: 'dead', name: 'Nikkei 225', region: 'JP', accent: 'sky' as const, ytdPct: null, trailingPe: null, forwardPe: null, eps2026: '', eps2027: '', live: false },
+  ]
+
+  eq(buildMarketRead([], mrIndices), null, 'market read: no picks returns null')
+
+  const mr = buildMarketRead([mrPick], mrIndices)
+  eq(mr != null, true, 'market read: one pick produces a read')
+  const read = mr!.marketRead
+
   eq(
-    isGrounded('AAA sits at 100.0 with the S&P 500 up 12.4% this year.', gPayload),
+    read.includes('S&P 500 +12.4% and Dow Jones -3.3% year to date.'),
     true,
-    'grounding: prose using only supplied figures passes',
+    'market read: index sentence is signed, rounded to 1dp and labelled YTD',
   )
   eq(
-    isGrounded('AAA rallied to $412.50 on heavy volume.', gPayload),
+    read.includes('Nikkei'),
     false,
-    'grounding: an invented figure is rejected',
+    'market read: an index with no YTD is dropped, not shown as flat',
   )
   eq(
-    isGrounded('Momentum is constructive and breadth is improving.', gPayload),
+    read.includes('One name cleared every gate today, scoring 100.'),
     true,
-    'grounding: prose with no figures passes',
+    'market read: a single pick is reported in the singular with its score',
   )
-  // Regex-only extraction reads "12.4" as one token, "100" as one, "109" as
-  // one — three numeric literals, not four; the brief's worked example
-  // assumed each digit run split further. Documented in the Task 5 report.
   eq(
-    numericTokens('up 12.4% from $100 to 109').length,
-    3,
-    'numericTokens: extracts every numeric token',
+    read.includes('all 1 trade below'),
+    false,
+    'market read: a pick sitting ON its average is not counted as below it',
+  )
+  eq(
+    read.includes('the median drawdown from the high is 25.0%'),
+    true,
+    'market read: drawdown magnitude is unsigned — the words carry the direction',
+  )
+  eq(
+    read.includes('1 sits in the golden zone'),
+    true,
+    'market read: golden-zone count agrees with the golden factor (0.5 inclusive)',
   )
 
-  // ── Structural phrases: period names/Fib ratios admitted IN CONTEXT ──
-  // Before this fix, the natural way to describe this system's own output —
-  // "holding above its 150-day average" — tripped the guard: no payload
-  // NUMBER happens to equal 150, so the whole commentary was dropped over
-  // phrasing, not a fabrication. The FIRST fix admitted the bare numbers
-  // unconditionally, which over-corrected (see the fabricated-claims block
-  // below); this one strips the PHRASE instead, same mechanism as
-  // identifyingStrings/stripIdentifyingStrings above.
+  // Per-stock line, composed entirely from that pick's own readings.
+  const line = mr!.perStock['AAA']
+  eq(line != null, true, 'market read: the pick gets a per-stock line')
   eq(
-    isGrounded('AAA is holding above its 150-day average.', gPayload),
+    line.startsWith('In line with its 150-day average,'),
     true,
-    'grounding: "150-day" in structural context passes',
+    'per-stock: price exactly on the average is named, not rendered as "0.0% above"',
   )
   eq(
-    isGrounded('AAA sits near the top of its 52-week range.', gPayload),
+    line.includes('the lower third of its regression channel'),
     true,
-    'grounding: "52-week" in structural context passes',
+    'per-stock: channel position is banded into thirds, not a false-precision percentage',
+  )
+  eq(
+    line.includes('25.0% off its high'),
+    true,
+    'per-stock: drawdown is stated unsigned',
+  )
+  eq(
+    line.includes('EPS +40.0% YoY, +40.0% next twelve months and +40.0% five-year CAGR.'),
+    true,
+    'per-stock: growth quotes the three figures the growth factor actually scores',
+  )
+  eq(
+    line.includes('Holding the golden zone at 50.0% retracement.'),
+    true,
+    'per-stock: golden-zone note reports the retracement ratio as a percentage',
   )
 
-  // Fabricated-claims regression: bare structural NUMBERS, with no
-  // structural word attached, must still be rejected like any other
-  // fabricated figure — this is exactly what the phrase-strip (vs.
-  // bare-value-admit) fix buys back. Payload deliberately avoids any
-  // coincidental legitimate match for 1/5/21/50/52/126/150 — price,
-  // margins and momentum are chosen to sit well clear of all seven, and the
-  // index roster reproduces the names whose embedded digits leaked before
-  // Task 5's fix (Russell 2000, Nasdaq-100, S&P 500, TA-35), to also
-  // reconfirm THAT leak is still closed.
-  const structuralPick = toPick(
+  // Degradation: a pick with no technicals and no growth figures contributes
+  // no line at all rather than an empty or half-formed sentence.
+  const barePick = toPick(
     evaluate({
       ...perfect,
-      price: 344.1,
-      trailingPe: 28.7,
-      yoyPct: 33.3,
-      ntmPct: 19.4,
-      epsCagr5yr: 22.1,
-      allTimeHigh: 344.1 / (1 - 0.184), // pctFromAth ≈ -18.4%, clear of all seven
-      // The bar close fed to mkTech (360) is deliberately NOT the same as
-      // `price` above (344.1) — it only drives retracement/positionPct/the
-      // composite score, none of which need to match price for a synthetic
-      // fixture, and 360 was picked (by brute-force search over the fib
-      // window) specifically so neither retracement's own value nor the
-      // resulting score round to 1/5/21/50/52/126/150 at any of
-      // groundedNumbers' supported precisions. 344.1 itself rounded to 1
-      // (retracement ≈ 1.0) and 50 (score ≈ 50.4/50.0) at nearby values —
-      // exactly the class of coincidental collision this payload exists to
-      // avoid.
-      technicals: mkTech(42.7, 360, { high: 400, low: 300, direction: 'rally', anchor: 'swing', levels: [] }),
+      symbol: 'BARE',
+      sma150: null,
+      allTimeHigh: null,
+      yoyPct: null,
+      ntmPct: null,
+      epsCagr5yr: null,
+      technicals: null,
     }),
   )
-  const structuralPayload = buildPayload(
-    [structuralPick],
-    [
-      { key: 'rut', name: 'Russell 2000', ytdPct: 8.1, trailingPe: 24.6, forwardPe: 19.4 },
-      { key: 'ndx', name: 'Nasdaq-100', ytdPct: 22.3, trailingPe: 31.7, forwardPe: 27.9 },
-      { key: 'sp500', name: 'S&P 500', ytdPct: 12.4, trailingPe: 24.1, forwardPe: 20.3 },
-      { key: 'ta35', name: 'TA-35', ytdPct: 9.6, trailingPe: 14.2, forwardPe: 12.8 },
-    ],
+  const bareRead = buildMarketRead([barePick], [])
+  eq(
+    bareRead!.perStock['BARE'],
+    undefined,
+    'market read: a pick with nothing to say contributes no per-stock line',
   )
   eq(
-    isGrounded('AAA has a breakout target near $150.', structuralPayload),
-    false,
-    'grounding: a bare $150 (no structural word attached) is rejected',
-  )
-  eq(
-    isGrounded('AAA broke $52 support.', structuralPayload),
-    false,
-    'grounding: a bare $52 (no "week" attached) is rejected',
-  )
-  eq(
-    isGrounded('AAA gained 5% on the session.', structuralPayload),
-    false,
-    'grounding: a bare 5% ("session" not hyphenated onto the number) is rejected',
-  )
-  eq(
-    isGrounded("AAA's operating margin reached 21%.", structuralPayload),
-    false,
-    'grounding: a bare 21% (no "day" attached) is rejected',
-  )
-  eq(
-    isGrounded('AAA is 50% off its high.', structuralPayload),
-    false,
-    'grounding: a bare 50% (no Fib word attached) is rejected',
-  )
-  eq(
-    isGrounded('AAA could fall to $126.', structuralPayload),
-    false,
-    'grounding: a bare $126 (no "bar" attached) is rejected',
-  )
-  eq(
-    isGrounded('AAA added $1 today.', structuralPayload),
-    false,
-    'grounding: a bare $1 (no "day" attached) is rejected',
-  )
-  // Same payload, still in structural context: these must keep passing —
-  // the tightening must not have thrown out the phrasing this whole feature
-  // exists to permit.
-  eq(
-    isGrounded('AAA is holding above its 150-day average.', structuralPayload),
+    bareRead!.marketRead.startsWith('One name cleared every gate today'),
     true,
-    'grounding: "150-day" still passes against the fabricated-claims payload',
-  )
-  eq(
-    isGrounded('AAA sits near the top of its 52-week range.', structuralPayload),
-    true,
-    'grounding: "52-week" still passes against the fabricated-claims payload',
-  )
-  eq(
-    isGrounded('AAA is pulling back toward the 61.8% retracement.', structuralPayload),
-    true,
-    'grounding: a Fib ratio WITH its word attached ("61.8% retracement") passes',
+    'market read: with no indices and no readings the cohort sentence still stands alone',
   )
 
-  // Index-name digit leak (Task 5's fix round): still closed.
+  // Upper-channel / above-SMA wording, and the plural cohort branch.
+  const hotPick = toPick(
+    evaluate({
+      ...perfect,
+      symbol: 'HOT',
+      price: 110,
+      sma150: 100,
+      technicals: mkTech(80, 110, { high: 200, low: 0, direction: 'rally', anchor: 'swing', levels: [] }),
+    }),
+  )
+  const two = buildMarketRead([mrPick, hotPick], [])
   eq(
-    isGrounded('AAA is trading at $100 resistance.', structuralPayload),
-    false,
-    'grounding (index-leak regression): a fabricated $100 is still rejected',
+    two!.marketRead.includes('2 names cleared every gate today, scoring'),
+    true,
+    'market read: two or more picks use the plural cohort sentence',
   )
   eq(
-    isGrounded('AAA rallied to $500 today.', structuralPayload),
-    false,
-    'grounding (index-leak regression): the digits inside "S&P 500" do not leak into a fabricated $500',
+    two!.perStock['HOT'].includes('10.0% above its 150-day average'),
+    true,
+    'per-stock: a price above the average is described as above it',
   )
   eq(
-    isGrounded('AAA moved 2000 basis points intraday.', structuralPayload),
-    false,
-    'grounding (index-leak regression): the digits inside "Russell 2000" do not leak into a fabricated 2000',
-  )
-  eq(
-    isGrounded('AAA is down 35% from highs.', structuralPayload),
-    false,
-    'grounding (index-leak regression): the digits inside "TA-35" do not leak into a fabricated 35%',
-  )
-  eq(
-    isGrounded('AAA rallied to $317.25 on heavy volume.', structuralPayload),
-    false,
-    'grounding (index-leak regression): an invented precise figure is still rejected',
+    two!.perStock['HOT'].includes('the upper third of its regression channel'),
+    true,
+    'per-stock: a high channel position bands to the upper third',
   )
 
   // ── Derivations: momentum, range, surprise ───────────────────────

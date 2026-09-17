@@ -29,7 +29,7 @@ import type { PriceRange } from '@/lib/derive'
 import { bigUsd, marginPct, num, pct, ratio, usd } from '@/lib/format'
 import { deriveLevels, MAX_PICKS, MIN_MARKET_CAP, MIN_SCORE } from '@/lib/score'
 import type { SignalState } from '@/lib/signals'
-import type { Commentary } from '@/lib/ai/commentary'
+import type { Commentary } from '@/lib/market-read'
 import type { DigestData, DigestPick, DigestSelection, RenderedEmail } from './render'
 import { chip, escapeHtml, FONT, meter, PALETTE, shell, type ChipTone } from './primitives'
 import { commentaryPanel, indexStrip, metricsGrid, technicalLevels, type MetricBlock } from './primitives-v2'
@@ -237,7 +237,7 @@ function cardV2(p: DigestPick, rank: number, siteUrl: string, commentary: Commen
     </tr>
     ${
       stockRead
-        ? `<tr><td style="padding:0 18px 10px 18px;">${commentaryPanel({ heading: 'AI read', text: stockRead, compact: true })}</td></tr>`
+        ? `<tr><td style="padding:0 18px 10px 18px;">${commentaryPanel({ heading: 'Read', text: stockRead, compact: true })}</td></tr>`
         : ''
     }
     <tr>
@@ -318,7 +318,7 @@ export function renderDigestV2(data: DigestData): RenderedEmail {
   const indexRow = indices.length ? `<tr><td style="padding:0 0 14px 0;">${indexStrip(indices)}</td></tr>` : ''
 
   const marketRead = commentary?.marketRead
-    ? `<tr><td style="padding:0 0 16px 0;">${commentaryPanel({ heading: 'AI market read', text: commentary.marketRead })}</td></tr>`
+    ? `<tr><td style="padding:0 0 16px 0;">${commentaryPanel({ heading: 'Market read', text: commentary.marketRead })}</td></tr>`
     : ''
 
   const greeting = `
@@ -350,7 +350,7 @@ export function renderDigestV2(data: DigestData): RenderedEmail {
     ``,
     `Good morning, ${first}.`,
     ``,
-    commentary?.marketRead ? `AI market read: ${commentary.marketRead}` : null,
+    commentary?.marketRead ? `Market read: ${commentary.marketRead}` : null,
     commentary?.marketRead ? `` : null,
     n === 0
       ? data.selection.considered != null
@@ -368,7 +368,7 @@ export function renderDigestV2(data: DigestData): RenderedEmail {
               `   Momentum — 1d ${pct(p.change1dPct)} · 1w ${pct(p.change1wPct)} · 1m ${pct(p.change1mPct)}\n` +
               `   vs 150-day avg ${pct(p.vsSma150Pct)} · ${p.pctFromAth == null ? '' : `${pct(p.pctFromAth)} from the high`}\n` +
               `   ${reasons.length ? reasons.join('; ') : 'Cleared every entry gate.'}\n` +
-              (stockRead ? `   AI read: ${stockRead}\n` : '') +
+              (stockRead ? `   Read: ${stockRead}\n` : '') +
               `   ${data.siteUrl}/ticker/${p.symbol}`
             )
           })

@@ -23,12 +23,12 @@ import { easternDate } from '@/lib/eastern'
 // money and sends no mail, so it's safe to leave open.
 //
 // What is NOT safe to leave open: prepareDigest (called below), which
-// renders a PNG per pick, uploads each to Storage, and makes one paid
-// `claude-opus-5` call. That's why the call to it further down is gated
-// separately on `process.env.CRON_SECRET` actually being set — this
-// function returning `true` is not proof of who's calling when the secret
-// is unset (it returns `true` for EVERY caller in that case), so it cannot
-// be trusted to authorize spending money. See the comment at that gate.
+// renders a PNG per pick and uploads each to Storage. That's why the call
+// to it further down is gated separately on `process.env.CRON_SECRET`
+// actually being set — this function returning `true` is not proof of
+// who's calling when the secret is unset (it returns `true` for EVERY
+// caller in that case), so it cannot be trusted to authorize billable
+// work. See the comment at that gate.
 //
 // /api/digest can't take the same "stay open, gate the expensive part"
 // approach: its entire job IS the expensive part (a real Resend send to the
@@ -111,11 +111,12 @@ export async function GET(req: NextRequest) {
     // authorized() returns true for every caller when CRON_SECRET is unset
     // (this route's fail-OPEN default, see the comment above authorized()),
     // so "authorized() passed" proves nothing about who is calling.
-    // prepareDigest is the one thing in this route that spends real money —
-    // it renders a chart PNG per pick, uploads each to Storage, and makes
-    // one paid `claude-opus-5` call (up to 8000 tokens) — so until an
-    // operator sets CRON_SECRET, nobody, including whoever finds this URL,
-    // can trigger that spend by hitting it. Once the secret is set,
+    // prepareDigest is the one thing in this route that consumes billable
+    // resources — it renders a chart PNG per pick and uploads each to
+    // Storage, which costs both CPU inside a 60s function and standing
+    // bytes in the bucket — so until an operator sets CRON_SECRET, nobody,
+    // including whoever finds this URL, can trigger that by hitting it.
+    // Once the secret is set,
     // authorized() is a real check again and this condition is redundant
     // with it, but harmless to keep.
     const prep = process.env.CRON_SECRET
@@ -132,7 +133,7 @@ export async function GET(req: NextRequest) {
       prepOk: prep?.ok ?? false,
       prepPicks: prep?.picks ?? 0,
       prepCharts: prep?.chartsRendered ?? 0,
-      prepAiOk: prep?.aiOk ?? false,
+      prepReadOk: prep?.readOk ?? false,
     })
   } catch (e) {
     return NextResponse.json({ ok: false, error: (e as Error).message }, { status: 502 })

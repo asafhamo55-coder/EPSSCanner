@@ -5,7 +5,7 @@ import { buildSelection, readPrep } from '@/lib/digest'
 import type { Selection } from '@/lib/score'
 import { toDigestPickRecord } from '@/lib/score'
 import { renderDigest, type DigestData, type DigestSelection } from '@/lib/email/render'
-import type { Commentary } from '@/lib/ai/commentary'
+import type { Commentary } from '@/lib/market-read'
 import { getIndices, type IndexCardData } from '@/market-data/indices'
 import { sendEmails, type EmailMessage } from '@/lib/email/send'
 import {
@@ -174,7 +174,7 @@ export async function GET(req: NextRequest) {
             present: true,
             picks: prep.picks.length,
             chartsRendered: prep.chartCount,
-            commentaryPresent: prep.aiOk && prep.marketRead != null,
+            commentaryPresent: prep.readOk && prep.marketRead != null,
           }
         : { present: false },
     })
@@ -221,7 +221,7 @@ export async function GET(req: NextRequest) {
       // 4. Build.
       //
       // Normal path: the 09:30 UTC ingest cron already scored the watchlist,
-      // rendered a chart per pick and made the one Claude call, and left the
+      // rendered a chart per pick and composed the market read, and left the
       // result in screener_digest_prep — read it instead of repeating any of
       // that work here. `readPrep` scopes its query to `today`, so a row
       // only comes back if it was prepared for THIS Eastern date; a row from
@@ -286,8 +286,8 @@ export async function GET(req: NextRequest) {
       const origin = siteUrl()
       const asOfLabel = easternLabel(now)
 
-      // Header index strip data. Same source preparation used to build the AI
-      // payload (src/lib/digest.ts) — but COLD by construction here, not
+      // Header index strip data. Same source preparation used to compose the
+      // market read (src/lib/digest.ts) — but COLD by construction here, not
       // warm: `getIndices` is cached behind `unstable_cache(['key-indices-v1'],
       // { revalidate: 900 })`, a 15-minute TTL, and this route runs 90+
       // minutes after preparation populated it. Every read at this point is
@@ -300,7 +300,8 @@ export async function GET(req: NextRequest) {
       // unsendable.
       //
       // Raced against a 5s timer we control instead, exactly the pattern
-      // prepareDigest already uses for its own AI stage (src/lib/digest.ts):
+      // prepareDigest already uses for its own index fetch
+      // (src/lib/digest.ts):
       // losing the race resolves to an empty array — renderDigestV2's index
       // strip just renders nothing, the same degraded path a fetch failure
       // takes — losing the function loses the whole day.

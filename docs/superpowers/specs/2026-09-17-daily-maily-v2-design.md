@@ -1,5 +1,15 @@
 # TripleQ Daily Maily v2 — professional-grade digest
 
+> **Superseded in part, 2026-09-17.** Section 5 (AI commentary) no longer
+> describes the shipped system. The single `claude-opus-5` call and its
+> grounding guard were removed at the user's request; the market read and
+> per-stock lines are now composed deterministically from the picks' own
+> figures by `src/lib/market-read.ts`. The `Commentary` interface, the
+> `market_read` / `per_stock` storage columns, the panel in the template and
+> every degradation path described below are unchanged — only the producer
+> is different. See README → "The market read". The rest of this document
+> still describes the shipped system.
+
 A redesign of the daily email for expert traders: real price charts, AI-written
 market and per-stock commentary, substantially more data per pick, and deeper
 personalization. Ships behind a feature flag so the live list is never exposed

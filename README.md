@@ -61,7 +61,6 @@ step (creating a public bucket) — see Daily Maily v2 → Manual setup below.
 | `DIGEST_FROM` | Sender identity, e.g. `TripleQ Group <daily@tripleqgroup.com>`. Requires the domain verified in Resend |
 | `NEXT_PUBLIC_SITE_URL` | Absolute origin for links inside emails, e.g. `https://tripleqgroup.com`. No trailing slash — should share a domain with `DIGEST_FROM` in production (mismatched sender/footer domains read as untrustworthy and hurt deliverability) |
 | `DIGEST_TEST_EMAIL` | Sole recipient of `GET /api/digest?force=1`, for verifying a real send |
-| `ANTHROPIC_API_KEY` | Daily Maily v2's AI commentary call. Unset = commentary skipped, digest still sends |
 | `DIGEST_TEMPLATE` | `v1` (default) or `v2`. Leave unset until v2 has been reviewed — see Daily Maily v2 below |
 | `SUPABASE_STORAGE_BUCKET` | Chart-image bucket name. Defaults to `digest-charts` if unset |
 
@@ -220,8 +219,8 @@ Step 1.
 
 ## Daily Maily v2
 
-A redesign of the digest for expert traders: a real price chart per pick,
-AI-written market and per-stock commentary, and a deeper metrics/technicals
+A redesign of the digest for expert traders: a real price chart per pick, a
+composed market and per-stock read, and a deeper metrics/technicals
 breakdown — layered on top of everything above, behind a flag, so the live
 list is never exposed to work in progress.
 
@@ -266,15 +265,15 @@ correctness:
    watchlist inline, exactly as v1 did before this feature existed. No
    charts, no commentary — still sends.
 2. **Prep row present but partial** — some of the row's fields are `null`.
-   The digest uses whatever succeeded. Charts with no commentary (or the
-   reverse) is an expected, valid state, not a bug.
+   The digest uses whatever succeeded. A row with a market read but no
+   charts is an expected, valid state, not a bug.
 3. **Chart render fails** — including a native binary that fails to load at
    runtime (`@napi-rs/canvas` returns `null` rather than throwing on any
    failure). That pick's email falls back to the v1 CSS bar chart.
-4. **AI commentary fails** — the Claude call errors, is refused, gets raced
-   out by its own time budget, or comes back with a figure the grounding
-   guard can't trace to the input. Commentary is omitted; nothing else in
-   the email changes.
+4. **Nothing scores** — `buildMarketRead` returns `null` only for an empty
+   pick list, which is the same state that already means there is no email
+   to build. Short of that it always produces a read, saying less when
+   fields are missing (see The market read below).
 
 ### The public chart bucket
 
@@ -296,35 +295,43 @@ accumulates one row per day, indefinitely, at roughly 10 KB/day (mostly the
 `picks` jsonb column). Small, but the same unbounded-growth class as the
 chart bucket above; nothing prunes it yet.
 
-### AI commentary and its grounding rules
+### The market read
 
-`src/lib/ai/commentary.ts` makes exactly **one** Claude call per day
-(`claude-opus-5`, structured output via Zod, `effort: "low"`) to produce a
-market-wide read and a one-line read per pick. It returns `null` on any
-failure — missing key, API error, schema mismatch, or a grounding
-violation — and a `null` commentary simply omits those blocks; it never
-fails the digest.
+`src/lib/market-read.ts` composes the market-wide paragraph and the
+one-line read per pick. It is pure, synchronous and total: no network, no
+API key, no cost, and no failure path — the only `null` it returns is for
+an empty pick list.
 
-The model is given **only numbers this system already computed** — index
-readings, and per pick its score, factor breakdown, price, valuation,
-technical levels and momentum — with no tools and no web access. Two rules
-are enforced in the system prompt and by review:
+**This used to be one `claude-opus-5` call per day, guarded at runtime by a
+grounding check that scanned the generated prose for numbers it could not
+trace back to the input.** The call was removed on 2026-09-17; the module
+that replaced it builds every sentence directly out of fields already on
+`ScoredPick` and `IndexCardData`. That turns the property the guard was
+checking into a structural one — a figure that is never generated cannot be
+fabricated — which is why no grounding guard exists any more. It is not a
+check that was dropped; it is a check that no longer has anything to catch.
 
-1. **It may not introduce a figure that isn't in its input.** It interprets
-   supplied numbers; it never supplies new ones. An invented price or
-   percentage in a financial email is the worst thing this feature could
-   produce, and no automated check downstream would catch it.
-2. **It describes what the data shows; it does not recommend action.** The
-   app's existing disclaimer — *Fundamental signals only — not investment
-   advice* — stays prominent in v2.
+What it says, and where each figure comes from:
 
-A post-generation guard (`isGrounded` in `src/lib/ai/prompt.ts`) scans the
-returned prose for numeric tokens that don't trace back to the input payload
-and drops the commentary if any are found. **Be honest about what this
-catches:** it's a coarse net for a fabricated number like an invented
-`$412.50`, not a fact-checker. A real number from the payload attached to
-the wrong claim — crediting the wrong stock, or calling a decline a rally —
-passes it untouched.
+| Sentence | Source |
+|---|---|
+| Index performance, year to date | `IndexCardData.ytdPct` — indices with no YTD are dropped, never shown flat |
+| How many names cleared every gate, and the score range | `ScoredPick.score` |
+| How many trade below their 150-day average, how many are in the golden zone, the median drawdown | `vsSma150Pct`, `retracement`, `pctFromAth` |
+| Per pick: position vs the average, band within the channel, distance off the high | `vsSma150Pct`, `positionPct`, `pctFromAth` |
+| Per pick: EPS growth on three horizons | `yoyPct`, `ntmPct`, `epsCagr5yr` |
+
+Two deliberate choices in the wording. The channel position is banded into
+thirds rather than quoted as a percentage — the regression fit is a rough
+read, and "31% up the channel" implies precision it does not carry (the
+metrics grid still shows the exact figure). And every clause is emitted
+only when the field behind it is present, so a pick with no technicals
+contributes a shorter line, or none at all, instead of a half-formed
+sentence.
+
+The read describes what the data shows and never recommends action. The
+app's existing disclaimer — *Fundamental signals only — not investment
+advice* — stays prominent in v2.
 
 ### The `@napi-rs/canvas` build dependency
 
@@ -339,7 +346,6 @@ line first.
 
 | Var | Value |
 |---|---|
-| `ANTHROPIC_API_KEY` | The commentary call. Unset ⇒ commentary is skipped, digest still sends |
 | `DIGEST_TEMPLATE` | `v1` (current CSS-bar template) or `v2`. **Unset means v1** — deliberately, so a deploy that forgets to set this cannot change what subscribers receive |
 | `SUPABASE_STORAGE_BUCKET` | Bucket for chart PNGs. Defaults to `digest-charts` if unset |
 
@@ -350,8 +356,7 @@ line first.
 2. In the Supabase dashboard, create a **public** Storage bucket named
    `digest-charts` (or match whatever `SUPABASE_STORAGE_BUCKET` is set to).
    It must be public — see The public chart bucket above for why.
-3. Set `ANTHROPIC_API_KEY` in Vercel's project environment variables.
-4. Leave `DIGEST_TEMPLATE` unset until the v2 email has been reviewed (see
+3. Leave `DIGEST_TEMPLATE` unset until the v2 email has been reviewed (see
    Rollout below) — do not set it as part of this setup.
 
 ### Rollout

@@ -15,7 +15,7 @@ import type { SignalState } from '@/lib/signals'
 // this renderer has to accept it as an alternative to a full ScoredPick
 // rather than assume every pick it receives was just computed.
 import type { PrepPickRecord } from '@/lib/digest'
-import type { Commentary } from '@/lib/ai/commentary'
+import type { Commentary } from '@/lib/market-read'
 import type { IndexCardData } from '@/market-data/indices'
 import {
   bar,
@@ -67,8 +67,8 @@ export interface DigestData {
   asOfLabel: string
   /** Absolute origin for ticker / unsubscribe links, no trailing slash. */
   siteUrl: string
-  /** AI market commentary from the prepared row, or null on the fallback
-   *  path (no prep) or when the AI stage was skipped/timed out. Unused by
+  /** Market commentary composed from the prepared row's own figures, or
+   *  null on the fallback path (no prep) or when nothing scored. Unused by
    *  v1's markup today — threaded through so it reaches the template without
    *  route.ts needing to know which template is active (see Task 8/9). */
   commentary?: Commentary | null

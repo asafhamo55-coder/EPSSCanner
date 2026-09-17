@@ -1,5 +1,5 @@
 // v2-only inline-CSS building blocks: the index strip, the four-block metrics
-// grid, the technical-levels panel, and the AI-commentary panel. Every v1
+// grid, the technical-levels panel, and the commentary panel. Every v1
 // markup rule still applies (nested tables only, all CSS inline, light
 // palette, no SVG/script/flex/grid) — see primitives.ts's file banner for the
 // full rationale. This file adds only what v1 didn't need; escapeHtml,
@@ -321,11 +321,14 @@ export function technicalLevels(opts: {
 </table>`
 }
 
-// ─── AI-commentary panel ───────────────────────────────────────────
+// ─── Commentary panel ──────────────────────────────────────────────
 // infoSoft/infoInk — the same pair primitives.ts already reserves for the
 // 'turnaround' signal state — reused here as the "this is generated, not
-// editorial" tint, per spec §7's requirement that AI copy be visibly
-// labelled rather than presented as house commentary. Body copy sits in
+// editorial" tint. Spec §7 required that of AI copy; the copy is now
+// composed from the picks' own figures instead (src/lib/market-read.ts),
+// and the tint is kept for the same reason it was introduced: a reader
+// should be able to tell generated prose from house commentary at a
+// glance, whatever generates it. Body copy sits in
 // `body` (9.02:1 on infoSoft), never `muted` (4.15:1 — fails).
 export function commentaryPanel(opts: { heading: string; text: string; compact?: boolean }): string {
   const pad = opts.compact ? '10px 12px' : '16px 18px'
