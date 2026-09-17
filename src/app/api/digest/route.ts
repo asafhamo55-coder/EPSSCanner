@@ -2,10 +2,17 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { ingestAllActive } from '@/lib/ingest'
 import { publish } from '@/lib/publish'
 import { buildSelection } from '@/lib/digest'
+import type { Selection } from '@/lib/score'
 import { toDigestPickRecord } from '@/lib/score'
 import { renderDigest } from '@/lib/email/render'
 import { sendEmails, type EmailMessage } from '@/lib/email/send'
-import { claimDigestDay, listConfirmed, recordDigestSend, releaseDigestDay } from '@/lib/subscribers'
+import {
+  claimDigestDay,
+  digestSentOn,
+  listConfirmed,
+  recordDigestSend,
+  releaseDigestDay,
+} from '@/lib/subscribers'
 import { siteUrl } from '@/lib/site'
 import { db } from '@/lib/db'
 
@@ -130,6 +137,33 @@ export async function GET(req: NextRequest) {
   const sendNow = req.nextUrl.searchParams.get('now') === '1'
   const now = new Date()
   const today = easternDate(now)
+
+  // `status=1` reports what a run WOULD do and returns before anything is
+  // claimed, sent or recorded. It exists because every other path through this
+  // route mails people: a bare GET inside the 6-7 window is indistinguishable
+  // from a cron fire and will send, which is genuinely surprising to anyone
+  // treating it as an inspection endpoint — it has now caused two accidental
+  // sends. A read-only mode is the fix; remembering to append `?force=1` is
+  // not. Placed FIRST so no guard, claim or ingest can run ahead of it.
+  if (req.nextUrl.searchParams.get('status') === '1') {
+    const [selection, confirmed] = await Promise.all([
+      buildSelection().catch((e) => ({ error: (e as Error).message })),
+      listConfirmed().then((s) => s.length).catch(() => null),
+    ])
+    const already = await digestSentOn(today).catch(() => null)
+    return NextResponse.json({
+      ok: true,
+      mode: 'status',
+      easternDate: today,
+      easternHour: easternHour(now),
+      inSendWindow: [6, 7].includes(easternHour(now)),
+      alreadySentToday: already,
+      confirmedSubscribers: confirmed,
+      picks: 'error' in (selection as object) ? null : (selection as Selection).picks.length,
+      considered: 'error' in (selection as object) ? null : (selection as Selection).considered,
+      wouldSendTo: confirmed,
+    })
+  }
 
   // 1. Hour guard. Accepts Eastern hour 6 OR 7, which on the current single
   //    11:00 UTC schedule means summer (07:00 ET) and winter (06:00 ET) both

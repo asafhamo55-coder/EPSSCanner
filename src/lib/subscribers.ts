@@ -206,6 +206,27 @@ export async function releaseDigestDay(id: string): Promise<void> {
   if (error) console.error(`[digest] could not release claimed day ${id}: ${error.message}`)
 }
 
+/** Today's send ledger row, or null if the day is unclaimed. Read-only — the
+ *  status endpoint needs to report whether a digest already went out without
+ *  claiming the day as a side effect of asking. */
+export async function digestSentOn(
+  sentOn: string,
+): Promise<{ recipientCount: number; pickCount: number } | null> {
+  const supabase = db()
+  const { data, error } = await supabase
+    .from('screener_digest_sends')
+    .select('recipient_count, pick_count')
+    .eq('sent_on', sentOn)
+    .maybeSingle()
+  if (error) throw new Error(error.message)
+  if (!data) return null
+  const r = data as Row
+  return {
+    recipientCount: (r.recipient_count as number) ?? 0,
+    pickCount: (r.pick_count as number) ?? 0,
+  }
+}
+
 export async function recordDigestSend(
   id: string,
   recipientCount: number,
