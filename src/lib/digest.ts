@@ -149,8 +149,13 @@ export const getCachedSelection = unstable_cache(buildSelection, ['digest-select
  *  ceiling. */
 const CHART_CONCURRENCY = 4
 
-/** Preparation's own deadline, separate from (and smaller than) the ingest
- *  route's `maxDuration`. Ingest itself plus its post-publish warm phase
+/** Preparation's own CEILING, separate from (and smaller than) the ingest
+ *  route's `maxDuration`. The caller passes how much wall-clock it can
+ *  actually spare (`budgetMs`) and the smaller of the two wins, so a slow
+ *  ingest shortens preparation instead of pushing the whole function past
+ *  `maxDuration` — which is what it used to do: this budget was applied
+ *  unconditionally no matter how little time was left, and the platform
+ *  killed the invocation at 60s before the upsert could run. Ingest itself plus its post-publish warm phase
  *  (WARM_BUDGET_MS) both run before this, so this budget has to leave room
  *  for both ahead of it inside the same 60s function.
  *
@@ -177,6 +182,14 @@ const UPSERT_RESERVE_MS = 4_000
  *  straight to the upsert rather than gambling the reserve away. Racing a
  *  fetch that never had a real chance just delays reaching the write. */
 const INDICES_MIN_MS = 6_000
+
+/** Least wall-clock in which preparation can still produce a USEFUL row.
+ *  `buildSelection` alone measured 5.5-11.4s against production, and
+ *  UPSERT_RESERVE_MS is carved off the end, so below this there is no room
+ *  to score and still write what was scored. The caller skips preparation
+ *  entirely rather than burning the remainder of the function on a run that
+ *  cannot finish. */
+export const PREP_MIN_MS = 18_000
 
 /** How many days of chart folders `pruneCharts` keeps — matches the figure
  *  README.md's "public chart bucket" section already documents
@@ -260,7 +273,10 @@ export interface Prep {
  *  `buildSelection()` is NOT guarded here: an empty watchlist means there is
  *  nothing to prepare, and that failure is meant to surface — the caller
  *  already wraps this whole call in `.catch()` for exactly that case. */
-export async function prepareDigest(prepOn: string): Promise<PrepResult> {
+export async function prepareDigest(
+  prepOn: string,
+  budgetMs: number = PREP_BUDGET_MS,
+): Promise<PrepResult> {
   // Idempotent for the day. The upsert at the end of this function OVERWRITES
   // screener_digest_prep (`onConflict: 'prep_on'`), so without this early
   // return a retried or duplicated invocation for the same Eastern date would
@@ -276,7 +292,7 @@ export async function prepareDigest(prepOn: string): Promise<PrepResult> {
     return { ok: true, picks: existing.picks.length, chartsRendered: existing.chartCount, readOk: existing.readOk }
   }
 
-  const deadline = Date.now() + PREP_BUDGET_MS
+  const deadline = Date.now() + Math.min(budgetMs, PREP_BUDGET_MS)
 
   const selection = await buildSelection()
 
