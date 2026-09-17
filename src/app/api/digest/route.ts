@@ -6,7 +6,7 @@ import type { Selection } from '@/lib/score'
 import { toDigestPickRecord } from '@/lib/score'
 import { renderDigest, type DigestData, type DigestSelection } from '@/lib/email/render'
 import type { Commentary } from '@/lib/ai/commentary'
-import { getIndices } from '@/market-data/indices'
+import { getIndices, type IndexCardData } from '@/market-data/indices'
 import { sendEmails, type EmailMessage } from '@/lib/email/send'
 import {
   claimDigestDay,
@@ -276,15 +276,37 @@ export async function GET(req: NextRequest) {
       const asOfLabel = easternLabel(now)
 
       // Header index strip data. Same source preparation used to build the AI
-      // payload (src/lib/digest.ts), already warm behind `unstable_cache`
-      // (['key-indices-v1'], 15 min) by the time this route runs 90+ minutes
-      // later — this is expected to be a cache hit, not a fresh Yahoo
-      // round-trip. Never allowed to fail the send: an empty array here just
-      // means renderDigestV2's index strip renders nothing, same as any other
-      // degraded path in this pipeline.
-      const indices = await getIndices().catch((e) => {
-        console.error(`[digest] indices failed: ${(e as Error).message}`)
-        return []
+      // payload (src/lib/digest.ts) — but COLD by construction here, not
+      // warm: `getIndices` is cached behind `unstable_cache(['key-indices-v1'],
+      // { revalidate: 900 })`, a 15-minute TTL, and this route runs 90+
+      // minutes after preparation populated it. Every read at this point is
+      // therefore a guaranteed miss — a live fan-out of up to 7 Yahoo
+      // requests, none of which carries its own timeout — and it runs AFTER
+      // claimDigestDay and BEFORE sendStarted = true. A hang here past
+      // `maxDuration` is a platform kill, not a rejected promise a `.catch()`
+      // can see: the process dies mid-flight, the `catch` below never runs,
+      // `releaseDigestDay` never runs, and the day becomes permanently
+      // unsendable.
+      //
+      // Raced against a 5s timer we control instead, exactly the pattern
+      // prepareDigest already uses for its own AI stage (src/lib/digest.ts):
+      // losing the race resolves to an empty array — renderDigestV2's index
+      // strip just renders nothing, the same degraded path a fetch failure
+      // takes — losing the function loses the whole day.
+      let indicesTimer: ReturnType<typeof setTimeout> | undefined
+      const indices = await Promise.race([
+        getIndices().catch((e) => {
+          console.error(`[digest] indices failed: ${(e as Error).message}`)
+          return [] as IndexCardData[]
+        }),
+        new Promise<IndexCardData[]>((resolve) => {
+          indicesTimer = setTimeout(() => {
+            console.warn('[digest] indices timed out after 5000ms — sending with an empty index strip')
+            resolve([])
+          }, 5000)
+        }),
+      ]).finally(() => {
+        if (indicesTimer) clearTimeout(indicesTimer)
       })
 
       // 5. Send.

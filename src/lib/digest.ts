@@ -14,7 +14,7 @@ import {
   type Selection,
 } from './score'
 import { renderChart } from './chart/render'
-import { uploadChart } from './chart/store'
+import { pruneCharts, uploadChart } from './chart/store'
 import { generateCommentary } from './ai/commentary'
 import { getIndices } from '@/market-data/indices'
 import { db } from './db'
@@ -165,6 +165,12 @@ const UPSERT_RESERVE_MS = 4_000
  *  skipped commentary is a degraded email; racing a call that never had a
  *  real chance just delays reaching the write below. */
 const AI_MIN_MS = 8_000
+
+/** How many days of chart folders `pruneCharts` keeps — matches the figure
+ *  README.md's "public chart bucket" section already documents
+ *  (~40KB/chart × 10 charts/day ≈ 12MB standing). Run once per day, after
+ *  the row above is safely persisted — see the call site below. */
+const CHART_RETENTION_DAYS = 30
 
 /** Renders and uploads a chart per pick, mutating `chartUrl` onto the
  *  ScoredPick in place. `renderChart`/`uploadChart` already never throw —
@@ -349,6 +355,18 @@ export async function prepareDigest(prepOn: string): Promise<PrepResult> {
     console.error(`[prep] upsert threw: ${(e as Error).message}`)
     return { ok: false, picks: selection.picks.length, chartsRendered, aiOk: commentary != null }
   }
+
+  // Best-effort, AFTER the row above is safely written — pruneCharts itself
+  // already never throws (see chart/store.ts), but it's wrapped here too so
+  // that even an unexpected failure can never affect the PrepResult this
+  // function returns for the row that was JUST persisted. README.md
+  // documents storage staying near ~12MB by keeping CHART_RETENTION_DAYS of
+  // chart folders — that claim was false until this call existed; pruneCharts
+  // had no caller anywhere in the codebase before this.
+  await pruneCharts(CHART_RETENTION_DAYS).catch((e) => {
+    console.error(`[prep] chart prune threw: ${(e as Error).message}`)
+    return 0
+  })
 
   return { ok: true, picks: selection.picks.length, chartsRendered, aiOk: commentary != null }
 }

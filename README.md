@@ -289,6 +289,11 @@ Bucket creation is **manual** — see Manual setup below — because creating a
 bucket needs dashboard-level privileges the service-role key doesn't
 necessarily carry.
 
+`screener_digest_prep` itself has no equivalent retention policy — it
+accumulates one row per day, indefinitely, at roughly 10 KB/day (mostly the
+`picks` jsonb column). Small, but the same unbounded-growth class as the
+chart bucket above; nothing prunes it yet.
+
 ### AI commentary and its grounding rules
 
 `src/lib/ai/commentary.ts` makes exactly **one** Claude call per day
