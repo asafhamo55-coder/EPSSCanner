@@ -121,19 +121,27 @@ function logoUrl(symbol: string): string {
  *  from PEG (see epsCagr5yr in derive.ts), not from signals.ts — so its chip
  *  below stays coloured on the sign of the value, unlike YoY/NTM. */
 function card(p: DigestPick, rank: number, siteUrl: string): string {
-  // `reasons`, `positionPct`, `retracement` and `input` (for the YoY/NTM
-  // signal state) only exist on a freshly-scored ScoredPick — a
-  // PrepPickRecord read back from screener_digest_prep has none of them (see
-  // the DigestPick note above). Falling back to a neutral/absent rendering
-  // for each is a richness degradation, never a wrong one: the reason text
-  // falls back to the same generic sentence already used when a ScoredPick
-  // happens to have no reasons, and the bars already render "n/a"/empty for
-  // a null positionPct/retracement.
-  const reasons = 'reasons' in p ? p.reasons : []
+  // `reasons`, `positionPct`, `retracement`, `yoyState` and `ntmState` are
+  // part of `DigestPickRecord` since Task 7's fix round 1 (see score.ts), so
+  // a `PrepPickRecord` read back from screener_digest_prep carries all five
+  // — a ScoredPick carries the state pair nested under `input` instead. The
+  // `'x' in p` checks below are NOT type-narrowing noise: `picks` is a jsonb
+  // column, and a row written before that fix round genuinely lacks these
+  // keys at runtime even though the TS type now claims they're required, so
+  // this is real defence against old data, not just satisfying the
+  // compiler. Falling back to a neutral/absent rendering for each on such a
+  // row is a richness degradation, never a wrong one: the reason text falls
+  // back to the same generic sentence already used when a ScoredPick happens
+  // to have no reasons, the bars render "n/a"/empty for a null
+  // positionPct/retracement, and the chip tone falls back to colouring by
+  // the sign of the value (see valueTone) rather than by SignalState.
+  const reasons = 'reasons' in p && p.reasons ? p.reasons : []
   const positionPct = 'positionPct' in p ? p.positionPct : null
   const retracement = 'retracement' in p ? p.retracement : null
-  const yoyTone = 'input' in p ? chipTone(p.input.yoyState) : valueTone(p.yoyPct)
-  const ntmTone = 'input' in p ? chipTone(p.input.ntmState) : valueTone(p.ntmPct)
+  const yoyState: SignalState | undefined = 'input' in p ? p.input.yoyState : p.yoyState
+  const ntmState: SignalState | undefined = 'input' in p ? p.input.ntmState : p.ntmState
+  const yoyTone = yoyState ? chipTone(yoyState) : valueTone(p.yoyPct)
+  const ntmTone = ntmState ? chipTone(ntmState) : valueTone(p.ntmPct)
   const href = `${siteUrl}/ticker/${encodeURIComponent(p.symbol)}`
   const reason = reasons.length
     ? (() => {
@@ -231,13 +239,16 @@ function card(p: DigestPick, rank: number, siteUrl: string): string {
 }
 
 function emptyState(selection: DigestSelection): string {
-  // `selection.considered` is null on the prepared path (screener_digest_prep
-  // doesn't persist it) — degrade to a sentence that doesn't name a watchlist
-  // size rather than print "Of null names".
+  // `selection.considered` is null on a prepared row written before
+  // migration 0031 added the column — degrade to a sentence that doesn't
+  // name a watchlist size rather than print "Of null names". (Note: "No
+  // name both passed..." doesn't parse — "no name" is singular, "both"
+  // wants a plural subject — so the null branch drops "both" entirely
+  // rather than trying to force it in.)
   const intro =
     selection.considered != null
       ? `Of ${selection.considered} names on the watchlist, none both passed every entry gate`
-      : `No name both passed every entry gate`
+      : `Nothing passed every entry gate`
   return `
 <tr><td style="padding:0 0 14px 0;">
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:${PALETTE.surface};border:1px solid ${PALETTE.line};border-radius:12px;">
@@ -321,7 +332,7 @@ export function renderDigest(data: DigestData): { subject: string; html: string;
         : `Nothing cleared this morning's entry gate.`
       : picks
           .map((p, i) => {
-            const reasons = 'reasons' in p ? p.reasons : []
+            const reasons = 'reasons' in p && p.reasons ? p.reasons : []
             return (
               `${i + 1}. ${p.symbol} (${p.name ?? ''}) — ${p.score.toFixed(1)}/100\n` +
               `   Price ${usd(p.price)} · Market cap ${bigUsd(p.marketCap)} · P/E ${num(p.trailingPe, 1)}\n` +

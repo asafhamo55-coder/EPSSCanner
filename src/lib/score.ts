@@ -411,18 +411,33 @@ export function toPick(e: Evaluation): ScoredPick {
 }
 
 /** Compact projection of a ScoredPick for persistence (screener_digest_sends.
- *  picks, a jsonb audit column). Deliberately excludes `input.technicals` —
- *  126 OHLC bars plus four 126-point series per pick, ~30–60KB each, which
- *  would otherwise accumulate at roughly 0.5MB/day / 150MB/year of raw market
- *  data inside an audit table, against a 500MB Supabase free-tier cap. Kept
- *  next to ScoredPick/toPick so the audit shape stays defined beside the type
- *  it projects.
+ *  picks, and — since Task 7 — screener_digest_prep.picks, both jsonb
+ *  columns). Deliberately excludes `input.technicals` — 126 OHLC bars plus
+ *  four 126-point series per pick, ~30–60KB each, which would otherwise
+ *  accumulate at roughly 0.5MB/day / 150MB/year of raw market data inside an
+ *  audit table, against a 500MB Supabase free-tier cap. Kept next to
+ *  ScoredPick/toPick so the audit shape stays defined beside the type it
+ *  projects.
  *
  *  The valuation, momentum and range fields added alongside chartUrl (see
  *  ScoredPick) are single numbers — negligible next to the bar series above —
  *  so they're included for audit. `chartUrl` itself is excluded: it's not
  *  carried context but an attached artifact from the preparation phase (Task
- *  6), not yet populated by anything that flows through here. */
+ *  6), not yet populated by anything that flows through here.
+ *
+ *  `reasons`, `positionPct`, `retracement`, `yoyState` and `ntmState` were
+ *  added in Task 7's fix round 1: the digest route's prepared-row path reads
+ *  this exact projection back (see readPrep in src/lib/digest.ts) and feeds
+ *  it to the same email renderer a freshly-scored ScoredPick goes through.
+ *  Without these five, every prepared-path card fell back to a generic
+ *  reason, an empty tunnel/golden-zone bar, and — worst — a YoY/NTM chip
+ *  coloured by the sign of the percentage instead of by SignalState, so a
+ *  'flag' (soft-positive) rendered green instead of amber. All five are
+ *  short strings/enums/small numbers, nothing like the technicals blob this
+ *  projection exists to exclude. Still excluded: `gates`, `passedGates` and
+ *  `input` itself (beyond the two states pulled out below) — the prepared
+ *  email doesn't need them, and `input.technicals` is exactly the payload
+ *  this type exists to keep out. */
 export interface DigestPickRecord {
   symbol: string
   name: string | null
@@ -432,10 +447,14 @@ export interface DigestPickRecord {
   marketCap: number | null
   trailingPe: number | null
   yoyPct: number | null
+  yoyState: SignalState
   ntmPct: number | null
+  ntmState: SignalState
   epsCagr5yr: number | null
   vsSma150Pct: number | null
   pctFromAth: number | null
+  positionPct: number | null
+  retracement: number | null
   forwardPe: number | null
   peg5yr: number | null
   netMarginTtm: number | null
@@ -447,6 +466,11 @@ export interface DigestPickRecord {
   change1wPct: number | null
   change1mPct: number | null
   fullRange: PriceRange | null
+  /** Why this pick cleared the bar, e.g. "strong YoY and NTM growth". Empty
+   *  is a legitimate value (a pick that passed on the strength of its score
+   *  alone) — the renderer's "Cleared every entry gate." fallback covers
+   *  that case, not a missing-field one. */
+  reasons: string[]
 }
 
 export function toDigestPickRecord(p: ScoredPick): DigestPickRecord {
@@ -459,10 +483,14 @@ export function toDigestPickRecord(p: ScoredPick): DigestPickRecord {
     marketCap: p.marketCap,
     trailingPe: p.trailingPe,
     yoyPct: p.yoyPct,
+    yoyState: p.input.yoyState,
     ntmPct: p.ntmPct,
+    ntmState: p.input.ntmState,
     epsCagr5yr: p.epsCagr5yr,
     vsSma150Pct: p.vsSma150Pct,
     pctFromAth: p.pctFromAth,
+    positionPct: p.positionPct,
+    retracement: p.retracement,
     forwardPe: p.forwardPe ?? null,
     peg5yr: p.peg5yr ?? null,
     netMarginTtm: p.netMarginTtm ?? null,
@@ -474,6 +502,7 @@ export function toDigestPickRecord(p: ScoredPick): DigestPickRecord {
     change1wPct: p.change1wPct ?? null,
     change1mPct: p.change1mPct ?? null,
     fullRange: p.fullRange ?? null,
+    reasons: p.reasons,
   }
 }
 

@@ -223,12 +223,18 @@ export async function GET(req: NextRequest) {
       // an error.
       //
       // `readPrep`'s picks are `toDigestPickRecord` projections with
-      // `chartUrl` attached (see src/lib/digest.ts), not full `ScoredPick`s —
-      // they carry none of `reasons`/`positionPct`/`retracement`/`input`
-      // (audit-irrelevant fields scoring computed in memory but never
-      // persisted), and the row itself doesn't carry `considered`/
-      // `belowCutoff` either. `renderDigest`'s `DigestSelection` type and
-      // `card()` both know how to degrade for exactly this shape — see
+      // `chartUrl` attached (see src/lib/digest.ts) — as of Task 7's fix
+      // round 1 that projection carries `reasons`/`positionPct`/
+      // `retracement`/`yoyState`/`ntmState` too, so the prepared path
+      // renders the real reason text and the real signal-state chip colour,
+      // not a degraded fallback. What it still does NOT carry: `gates`,
+      // `passedGates`, and `input` itself beyond the two states pulled out
+      // above (in particular `input.technicals` — exactly the ~27KB-per-pick
+      // payload this projection exists to keep out of a jsonb column).
+      // `considered`/`belowCutoff` come from the prep row's own columns
+      // (migration 0031) and are null for a row written before that
+      // migration — `renderDigest`'s `DigestSelection` type and `card()`
+      // both know how to degrade for a null denominator — see
       // src/lib/email/render.ts.
       const prep = await readPrep(today).catch((e) => {
         console.error(`[digest] prep read threw: ${(e as Error).message}`)
@@ -239,7 +245,7 @@ export async function GET(req: NextRequest) {
       let pickRecords: unknown
       let commentary: Commentary | null = null
       if (usingPrep && prep) {
-        selection = { picks: prep.picks, considered: null, belowCutoff: null }
+        selection = { picks: prep.picks, considered: prep.considered, belowCutoff: prep.belowCutoff }
         pickRecords = prep.picks
         commentary = prep.marketRead != null ? { marketRead: prep.marketRead, perStock: prep.perStock } : null
         console.log(

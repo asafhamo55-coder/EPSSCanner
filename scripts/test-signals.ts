@@ -50,10 +50,13 @@ import {
   vsSma150Pct,
 } from '../src/lib/derive'
 import { renderConfirm } from '../src/lib/email/confirm'
-import { renderDigest } from '../src/lib/email/render'
+import { renderDigest, type DigestSelection } from '../src/lib/email/render'
+import type { PrepPickRecord } from '../src/lib/digest'
+import { PALETTE } from '../src/lib/email/primitives'
 import {
   evaluate,
   selectPicks,
+  toDigestPickRecord,
   toPick,
   MAX_PICKS,
   MIN_MARKET_CAP,
@@ -831,6 +834,142 @@ async function main() {
   eq(rendererFullHtml.includes('<svg'), false, 'renderDigest: no inline SVG anywhere in the output')
   eq(rendererFullHtml.includes('display:flex'), false, 'renderDigest: no flexbox layout anywhere in the output')
   eq(rendererFullHtml.includes('display:grid'), false, 'renderDigest: no grid layout anywhere in the output')
+
+  // ── Email renderer — the prepared-row (PrepPickRecord) branch ────
+  // Task 7's digest route reads picks back from screener_digest_prep as
+  // `PrepPickRecord`s (a `toDigestPickRecord` projection + chartUrl), not
+  // full `ScoredPick`s, and `considered`/`belowCutoff` come from columns
+  // (migration 0031) that are null on a row written before it. Nothing
+  // above exercises that branch of card()/renderDigest — this is the
+  // committed guard the scratchpad verification from Task 7's first pass
+  // never became.
+  console.log('\nEmail renderers — prepared-row branch')
+
+  // A fresh prepared pick: exactly what a post-fix-round upsert writes —
+  // real reasons, real positionPct/retracement, and a real signal state.
+  // yoyPct: 10 with yoyState: 'flag' is the case the reviewer called out as
+  // mattering most: 10% is soft-positive (0–20% is 'flag', amber), so if the
+  // chip were coloured by sign instead of by state it would wrongly render
+  // green ('positive') — indistinguishable from a genuine >=20% 'pass'.
+  const rendererFreshFlagPick = toPick(
+    evaluate(mk('FRESH', { yoyPct: 10, yoyState: 'flag', ntmPct: 40, ntmState: 'pass' })),
+  )
+  const rendererPrepFresh: PrepPickRecord = {
+    ...toDigestPickRecord(rendererFreshFlagPick),
+    chartUrl: 'https://example.com/chart/FRESH.png',
+  }
+  eq(
+    rendererPrepFresh.reasons.length > 0 && rendererPrepFresh.yoyState === 'flag',
+    true,
+    'fixture sanity: the fresh prepared pick carries real reasons and yoyState',
+  )
+
+  // A legacy row: same yoyPct (10, soft-positive), but written before this
+  // fix round — the jsonb payload genuinely lacks reasons/positionPct/
+  // retracement/yoyState/ntmState at runtime even though the TS type now
+  // claims they're required. The cast mirrors readPrep's own
+  // `as PrepPickRecord[]` (no runtime validation), not a type escape hatch
+  // invented for this test — it is what a real old row looks like once cast.
+  const rendererPrepLegacy = {
+    symbol: 'LEGACY',
+    name: 'Legacy Co',
+    score: 55.5,
+    factors: [],
+    price: 42,
+    marketCap: 900_000_000_000,
+    trailingPe: 20,
+    yoyPct: 10,
+    ntmPct: -2,
+    epsCagr5yr: 1,
+    vsSma150Pct: 0.5,
+    pctFromAth: -5,
+    forwardPe: null,
+    peg5yr: null,
+    netMarginTtm: null,
+    grossMarginTtm: null,
+    operatingMarginTtm: null,
+    roiTtm: null,
+    epsSurprisePct: null,
+    change1dPct: null,
+    change1wPct: null,
+    change1mPct: null,
+    fullRange: null,
+    chartUrl: null,
+  } as unknown as PrepPickRecord
+
+  const rendererPrepSelection: DigestSelection = {
+    picks: [rendererPrepFresh, rendererPrepLegacy],
+    // Null exactly as a pre-0031 row (or a row `readPrep` mapped before the
+    // columns existed) reports it — the denominator-free header branch.
+    considered: null,
+    belowCutoff: null,
+  }
+
+  const rendererPrepMail = renderDigest({
+    recipient: { firstName: 'Test', unsubscribeToken: 'tok' },
+    selection: rendererPrepSelection,
+    asOfLabel: 'Monday, 1 January 2026',
+    siteUrl: 'https://example.com',
+    commentary: { marketRead: 'Markets steady.', perStock: { FRESH: 'Strong quarter.' } },
+  })
+
+  eq(
+    rendererPrepMail.html.includes('NaN'),
+    false,
+    'renderDigest (prep row): no "NaN" anywhere, full or legacy pick',
+  )
+  eq(
+    // The rendered sentence capitalizes only the very first character of the
+    // whole joined reason list (see the `card()` reason-building logic in
+    // render.ts), so compare from index 1 — everything after that is an
+    // unmodified substring of the persisted reasons[0].
+    rendererPrepMail.html.includes(rendererPrepFresh.reasons[0].slice(1)),
+    true,
+    'renderDigest (prep row): the fresh pick shows its real persisted reason, not the generic fallback',
+  )
+  eq(
+    rendererPrepMail.html.includes('Cleared every entry gate.'),
+    true,
+    'renderDigest (prep row): the legacy pick (no persisted reasons) falls back to the generic reason',
+  )
+  eq(
+    rendererPrepMail.html.includes(PALETTE.warningInk),
+    true,
+    "renderDigest (prep row): a fresh 'flag' (soft-positive) YoY chip renders amber, coloured by SignalState — not green by sign",
+  )
+  eq(
+    rendererPrepMail.html.includes('of null'),
+    false,
+    'renderDigest (prep row): a null considered never prints a fabricated denominator',
+  )
+  eq(
+    rendererPrepMail.html.includes(
+      `2 setups cleared the entry gate and scored ${MIN_SCORE} or better today. Ranked best first, ${MAX_PICKS} maximum.`,
+    ),
+    true,
+    'renderDigest (prep row): a null considered degrades the header to a denominator-free sentence',
+  )
+
+  // A prepared row with zero picks (a legitimate "nothing cleared" day) and
+  // no commentary must still render the empty state without a "No name
+  // both..." grammar break or an "Of null names" fabricated count.
+  const rendererPrepEmptyMail = renderDigest({
+    recipient: { firstName: 'Test', unsubscribeToken: 'tok' },
+    selection: { picks: [], considered: null, belowCutoff: null },
+    asOfLabel: 'Monday, 1 January 2026',
+    siteUrl: 'https://example.com',
+    commentary: null,
+  })
+  eq(
+    rendererPrepEmptyMail.html.includes('Of null'),
+    false,
+    'renderDigest (prep row, empty): a null considered never prints "Of null" in the empty state',
+  )
+  eq(
+    rendererPrepEmptyMail.html.includes('Nothing passed every entry gate'),
+    true,
+    'renderDigest (prep row, empty): the null-considered empty state reads grammatically',
+  )
 
   // ── AI commentary — grounding guard ───────────────────────────────
   console.log('\nAI commentary — grounding guard')

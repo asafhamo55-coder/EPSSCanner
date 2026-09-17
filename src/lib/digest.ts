@@ -219,6 +219,15 @@ export interface Prep {
   perStock: Record<string, string>
   chartCount: number
   aiOk: boolean
+  /** How many watchlist names buildSelection() considered, and how many
+   *  cleared every gate but fell below MIN_SCORE — see Selection. Both null
+   *  for a row written before migration 0031 added the columns (the jsonb
+   *  `picks` payload predates them too, but those degrade per-field instead;
+   *  these two have no such fallback, so null is the honest value). The
+   *  digest route's header degrades its copy rather than showing a
+   *  fabricated denominator when either is null. */
+  considered: number | null
+  belowCutoff: number | null
 }
 
 /** Runs the full preparation phase for one Eastern calendar date and upserts
@@ -310,6 +319,8 @@ export async function prepareDigest(prepOn: string): Promise<PrepResult> {
         per_stock: commentary?.perStock ?? null,
         chart_count: chartsRendered,
         ai_ok: commentary != null,
+        considered: selection.considered,
+        below_cutoff: selection.belowCutoff,
       },
       { onConflict: 'prep_on' },
     )
@@ -334,7 +345,7 @@ export async function readPrep(prepOn: string): Promise<Prep | null> {
     const supabase = db()
     const { data, error } = await supabase
       .from('screener_digest_prep')
-      .select('prep_on, picks, market_read, per_stock, chart_count, ai_ok')
+      .select('prep_on, picks, market_read, per_stock, chart_count, ai_ok, considered, below_cutoff')
       .eq('prep_on', prepOn)
       .maybeSingle()
     if (error) {
@@ -350,6 +361,8 @@ export async function readPrep(prepOn: string): Promise<Prep | null> {
       perStock: (r.per_stock as Record<string, string> | null) ?? {},
       chartCount: (r.chart_count as number | null) ?? 0,
       aiOk: (r.ai_ok as boolean | null) ?? false,
+      considered: (r.considered as number | null) ?? null,
+      belowCutoff: (r.below_cutoff as number | null) ?? null,
     }
   } catch (e) {
     console.error(`[prep] read threw: ${(e as Error).message}`)
