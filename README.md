@@ -34,9 +34,11 @@ adding/persisting tickers requires a Supabase project (below).
 In the SQL editor of your project (`oyhcchumlizmhwvjjlrl`), run in order:
 1. `supabase/migrations/0026_screener.sql`
 2. `supabase/migrations/0027_screener_views.sql`
-3. `supabase/migrations/0029_subscribers.sql` — required for the TripleQ Daily
+3. `supabase/migrations/0028_peg.sql` — adds the 5-yr-expected PEG ratio to
+   valuation snapshots.
+4. `supabase/migrations/0029_subscribers.sql` — required for the TripleQ Daily
    Maily (subscribers + the per-day send ledger; see below).
-4. `supabase/migrations/0030_digest_prep.sql` and
+5. `supabase/migrations/0030_digest_prep.sql` and
    `supabase/migrations/0031_digest_prep_counts.sql` — required for Daily
    Maily v2 (the preparation table; see below). Both are additive and
    idempotent — apply them even if you aren't turning v2 on yet.
@@ -356,9 +358,18 @@ line first.
 
 1. Ship every task with `DIGEST_TEMPLATE` unset. Subscribers keep receiving
    v1; nothing about their experience changes yet.
-2. Review v2 by hitting `/api/digest?force=1`, which sends only to
-   `DIGEST_TEST_EMAIL`, until it looks right.
-3. Flip `DIGEST_TEMPLATE=v2` in Vercel and redeploy.
+2. Review v2 by hitting `/api/digest?force=1&template=v2`, which sends only
+   to `DIGEST_TEST_EMAIL` — rendered with v2 for that request only, without
+   changing `DIGEST_TEMPLATE`. This is the step that actually makes v2
+   reviewable: `template` is honoured ONLY when `force=1` is also set (see
+   `resolveTemplateOverride` in `src/app/api/digest/resolve-template.ts`),
+   specifically so a bare `?template=v2` can never redirect a real send. Keep
+   hitting it with edits until it looks right — none of this touches what
+   the 11:00 UTC cron sends.
+3. Only once v2 looks right, flip `DIGEST_TEMPLATE=v2` in Vercel and
+   redeploy. This is the one step that changes what the cron sends to all 13
+   subscribers, and it should be the LAST step, after review — not a
+   precondition for being able to review at all.
 4. If anything is wrong in production, **unset `DIGEST_TEMPLATE`** — the next
    digest is v1 again. Reverting is an environment-variable change, not a
    code deploy.

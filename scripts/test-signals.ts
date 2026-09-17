@@ -67,6 +67,7 @@ import {
   type ScoreInput,
 } from '../src/lib/score'
 import { buildPayload, isGrounded, numericTokens } from '../src/lib/ai/prompt'
+import { resolveTemplateOverride } from '../src/app/api/digest/resolve-template'
 
 let failures = 0
 
@@ -1163,8 +1164,59 @@ async function main() {
     "renderDigest: DIGEST_TEMPLATE=' V2 ' still matches (trimmed + lowercased) and dispatches to v2",
   )
 
+  // The explicit `template` argument (Task 11/I5): lets the digest route
+  // preview v2 for one request without touching DIGEST_TEMPLATE. With the
+  // env var unset (v1 default), an explicit template='v2' argument still
+  // dispatches to v2 — and an explicit template='v1' argument overrides an
+  // env var of 'v2' back down to v1, proving the argument really takes
+  // precedence over the env var in both directions, not just when they agree.
+  delete process.env.DIGEST_TEMPLATE
+  eq(
+    renderDigest(rendererFlagData, 'v2').html.includes(V2_MARKER),
+    true,
+    "renderDigest: an explicit template='v2' argument dispatches to v2 even with DIGEST_TEMPLATE unset",
+  )
+  process.env.DIGEST_TEMPLATE = 'v2'
+  eq(
+    renderDigest(rendererFlagData, 'v1').html.includes(V2_MARKER),
+    false,
+    "renderDigest: an explicit template='v1' argument overrides DIGEST_TEMPLATE='v2' back to v1",
+  )
+  eq(
+    renderDigest(rendererFlagData, undefined).html.includes(V2_MARKER),
+    true,
+    'renderDigest: an undefined template argument falls back to DIGEST_TEMPLATE, same as omitting it',
+  )
+
   if (originalDigestTemplate === undefined) delete process.env.DIGEST_TEMPLATE
   else process.env.DIGEST_TEMPLATE = originalDigestTemplate
+
+  // resolveTemplateOverride (src/app/api/digest/route.ts's `template` query
+  // param, via the sibling module it's split into): honoured ONLY when
+  // `force` is true. Without this gate, `?template=v2` alone would redirect
+  // a REAL send to the unreviewed template — see the module's own doc
+  // comment for why `force` (which already redirects delivery to
+  // DIGEST_TEST_EMAIL) is what makes a safe preview possible.
+  eq(
+    resolveTemplateOverride(false, 'v2'),
+    undefined,
+    'resolveTemplateOverride: template=v2 without force=1 is ignored',
+  )
+  eq(
+    resolveTemplateOverride(true, 'v2'),
+    'v2',
+    'resolveTemplateOverride: template=v2 WITH force=1 is honoured',
+  )
+  eq(
+    resolveTemplateOverride(true, null),
+    undefined,
+    'resolveTemplateOverride: force=1 with no template param stays undefined (default dispatch)',
+  )
+  eq(
+    resolveTemplateOverride(false, null),
+    undefined,
+    'resolveTemplateOverride: neither force nor template set is undefined',
+  )
 
   // ── AI commentary — grounding guard ───────────────────────────────
   console.log('\nAI commentary — grounding guard')

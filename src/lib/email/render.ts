@@ -117,7 +117,14 @@ function chipTone(state: SignalState): ChipTone {
   if (state === 'pass') return 'positive'
   if (state === 'turnaround') return 'info'
   if (state === 'flag') return 'warning'
-  return 'negative' // 'fail' | 'na'
+  // 'fail' | 'na'. Note: 'na' cannot actually reach this function today —
+  // runGates' isGreen (score.ts) requires `state !== 'na' && pct > 0` for
+  // BOTH the YoY and NTM gates, so any pick carrying 'na' on either signal
+  // fails that gate and never clears into selectPicks' output, let alone
+  // this renderer. Mapped to 'negative' anyway, deliberately: this is
+  // defensive completeness for if that gate relationship ever changes, not
+  // dead code to delete.
+  return 'negative'
 }
 
 /** Chip tone for a `PrepPickRecord`, which carries the raw YoY/NTM percentage
@@ -385,14 +392,28 @@ export function renderDigestV1(data: DigestData): RenderedEmail {
   }
 }
 
-/** v1 unless DIGEST_TEMPLATE is exactly 'v2'. The default is deliberate: a
- *  deploy that forgets the flag must not change what subscribers receive —
- *  there are 13 real subscribers on v1 today, and reverting a bad v2 rollout
- *  has to be an env-var change, not a code deploy. Any value other than
- *  exactly 'v2' (missing, empty, mistyped, or anything else) fails safe to
- *  v1 rather than throwing or falling through to the new template. */
-export function renderDigest(data: DigestData): RenderedEmail {
-  return (process.env.DIGEST_TEMPLATE || 'v1').trim().toLowerCase() === 'v2'
-    ? renderDigestV2(data)
-    : renderDigestV1(data)
+/** v1 unless the resolved template is 'v2' after trimming whitespace and
+ *  lowercasing (so 'V2', ' v2 ', etc. all count — this comparison is NOT a
+ *  strict `=== 'v2'` on the raw value). "Resolved" means: the explicit
+ *  `template` argument when the caller supplies one, otherwise
+ *  `DIGEST_TEMPLATE`. The env-var default is deliberate: a deploy that
+ *  forgets the flag must not change what subscribers receive — there are 13
+ *  real subscribers on v1 today, and reverting a bad v2 rollout has to be an
+ *  env-var change, not a code deploy.
+ *
+ *  `template` exists so the digest route can let a `?template=v2` query
+ *  param (itself gated on `force=1`, so it can never touch a real send — see
+ *  src/app/api/digest/route.ts) preview v2 without setting DIGEST_TEMPLATE
+ *  in production. Before this parameter existed, seeing v2 at all required
+ *  flipping the env var, which would mail it to all 13 subscribers on the
+ *  very next cron, before anyone reviewed it — see README's Rollout
+ *  section, which now describes the sequence this makes possible: preview
+ *  via the query param first, flip the flag only once it looks right.
+ *
+ *  Anything that doesn't normalise to exactly 'v2' (missing, empty,
+ *  mistyped, or anything else) fails safe to v1 rather than throwing or
+ *  falling through to the new template. */
+export function renderDigest(data: DigestData, template?: string): RenderedEmail {
+  const resolved = (template ?? process.env.DIGEST_TEMPLATE ?? 'v1').trim().toLowerCase()
+  return resolved === 'v2' ? renderDigestV2(data) : renderDigestV1(data)
 }

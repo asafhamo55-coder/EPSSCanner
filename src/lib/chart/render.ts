@@ -22,6 +22,9 @@ const COLORS = {
   price: '#0f172a',
   sma: '#4f46e5',
   rail: '#cbd5e1',
+  /** The channel's centreline — same hue as `rail`, but translucent, so it
+   *  reads as a lighter reference line rather than a third boundary. */
+  railMid: 'rgba(148, 163, 184, 0.55)',
   golden: 'rgba(217, 119, 6, 0.13)',
   last: '#059669',
 }
@@ -106,6 +109,17 @@ export async function renderChart(input: ChartInput): Promise<Buffer | null> {
         rail.forEach((p, i) => (i === 0 ? ctx.moveTo(x(i), y(p)) : ctx.lineTo(x(i), y(p))))
         ctx.stroke()
       }
+      // Mid rail (spec §4.2): the channel's centreline. `channel.mid` was
+      // already computed and drawn on the dashboard, but never on this
+      // chart — a thinner, finer-dashed, translucent line so it reads as a
+      // centreline reference rather than a third boundary competing with
+      // the upper/lower rails.
+      ctx.strokeStyle = COLORS.railMid
+      ctx.lineWidth = 1.5
+      ctx.setLineDash([3, 5])
+      ctx.beginPath()
+      t.channel.mid.forEach((p, i) => (i === 0 ? ctx.moveTo(x(i), y(p)) : ctx.lineTo(x(i), y(p))))
+      ctx.stroke()
       ctx.setLineDash([])
     }
 
@@ -134,6 +148,29 @@ export async function renderChart(input: ChartInput): Promise<Buffer | null> {
     ctx.beginPath()
     ctx.arc(lastX, lastY, 7, 0, Math.PI * 2)
     ctx.fill()
+
+    // ── Date axis ─────────────────────────────────────────────────
+    // Spec §4.2 also asks for this — PAD.bottom (34px) was reserved for it
+    // from the start, but nothing drew into it. 4 evenly spaced labels
+    // (first bar, last bar, two between), short month/day format matching
+    // the dashboard's own convention (dayLabel() in
+    // components/charts/TechnicalChart.tsx: Unix seconds → 'Mon D').
+    // Alignment varies at the two ends so the label doesn't run past the
+    // plot edge — 'center' for interior labels is fine since PAD.left/right
+    // leave room either side of the first/last bar's x position.
+    const DATE_LABEL_COUNT = 4
+    ctx.fillStyle = COLORS.axis
+    ctx.font = '20px sans-serif'
+    ctx.textBaseline = 'top'
+    const labelIdx = new Set<number>()
+    for (let k = 0; k < DATE_LABEL_COUNT; k++) {
+      labelIdx.add(Math.round((k / (DATE_LABEL_COUNT - 1)) * (bars.length - 1)))
+    }
+    for (const i of labelIdx) {
+      const label = new Date(bars[i].t * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+      ctx.textAlign = i === 0 ? 'left' : i === bars.length - 1 ? 'right' : 'center'
+      ctx.fillText(label, x(i), H - PAD.bottom + 6)
+    }
 
     return canvas.toBuffer('image/png')
   } catch (e) {

@@ -60,10 +60,22 @@ export async function buildSelection(): Promise<Selection> {
   // failure — intentional for the dashboard, which should degrade rather than
   // 500. But an empty watchlist is never a legitimate state for THIS app (the
   // whole point of the feature is a non-empty watchlist to score), so treat
-  // it as the read failure it actually is. The caller (the digest route) has
-  // a releaseDigestDay() path built exactly for this: throwing here lets a
-  // claimed day be retried instead of recording "None of 0 watchlist names
-  // cleared this morning's entry gate" as a successfully sent digest.
+  // it as the read failure it actually is.
+  //
+  // This function has two callers with two different recovery paths, and
+  // BOTH need the throw — a swallowed [] would look like a legitimate "no
+  // picks today" to either one, which is the wrong call for both:
+  //   - The digest route's SEND path (src/app/api/digest/route.ts) claims
+  //     the Eastern day BEFORE calling this and has a releaseDigestDay()
+  //     path built exactly for this case: the throw lets a claimed day be
+  //     retried instead of recording "None of 0 watchlist names cleared
+  //     this morning's entry gate" as a successfully sent digest.
+  //   - prepareDigest() below (the PREP path, from /api/ingest) has no
+  //     day-claim at all yet — claiming happens later, only in the send
+  //     route — so releaseDigestDay doesn't apply to it. For prepareDigest,
+  //     the throw simply means preparation fails for the day and leaves no
+  //     row, which the send route's own fallback (readPrep returning null →
+  //     score inline) already handles.
   if (watchlist.length === 0) {
     throw new Error('buildSelection: watchlist came back empty — treating as a read failure')
   }

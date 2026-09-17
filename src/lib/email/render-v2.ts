@@ -39,7 +39,16 @@ function chipTone(state: SignalState): ChipTone {
   if (state === 'pass') return 'positive'
   if (state === 'turnaround') return 'info'
   if (state === 'flag') return 'warning'
-  return 'negative' // 'fail' | 'na'
+  // 'fail' | 'na'. Note: 'na' cannot actually reach this function today —
+  // runGates' isGreen (score.ts) requires `state !== 'na' && pct > 0` for
+  // BOTH the YoY and NTM gates, so any pick carrying 'na' on either signal
+  // fails that gate and never clears into selectPicks' output, let alone
+  // this renderer. Mapped to 'negative' anyway, deliberately: this is
+  // defensive completeness for if that gate relationship ever changes, not
+  // dead code to delete. (Kept byte-identical in logic to render.ts's own
+  // chipTone — see this file's banner for why it's duplicated rather than
+  // imported.)
+  return 'negative'
 }
 
 function valueTone(pctVal: number | null): ChipTone {
@@ -83,6 +92,15 @@ function cardV2(p: DigestPick, rank: number, siteUrl: string, commentary: Commen
   const levels = 'input' in p ? deriveLevels(p.input.technicals) : p.levels
   const yoyState: SignalState | undefined = 'input' in p ? p.input.yoyState : p.yoyState
   const ntmState: SignalState | undefined = 'input' in p ? p.input.ntmState : p.ntmState
+  // NOT dead code — do not delete the `valueTone` fallback branch here or
+  // below, even though `DigestPickRecord`'s TS type now claims yoyState/
+  // ntmState are always present on a `PrepPickRecord`. `picks` is a jsonb
+  // column: a row written to screener_digest_prep before Task 7's fix round
+  // 1 added these fields genuinely lacks them at runtime, whatever the
+  // current TypeScript type says — `yoyState` is `undefined` for real on
+  // that row, not just in theory, and this ternary is what keeps such a
+  // row's chip from rendering with a bogus/crashing tone instead of
+  // degrading to the sign-based colouring valueTone provides.
   const yoyTone = yoyState ? chipTone(yoyState) : valueTone(p.yoyPct)
   const ntmTone = ntmState ? chipTone(ntmState) : valueTone(p.ntmPct)
   const href = `${siteUrl}/ticker/${encodeURIComponent(p.symbol)}`

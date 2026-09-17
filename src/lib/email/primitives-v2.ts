@@ -46,13 +46,18 @@ function smaMarkerPct(v: number | null): number {
 }
 
 // ─── Index strip ────────────────────────────────────────────────────
-// DigestData (render.ts) carries no indices field today — the digest route
-// never fetches IndexCardData at send time (getIndices() is only called
-// during the morning prep phase, to build the AI commentary payload, and the
-// result isn't persisted). So `indices` on the v2 data shape is optional,
-// and an absent/empty array means this whole strip renders as '' — the same
-// "never fabricate, degrade in richness" rule chartUrl and commentary follow
-// elsewhere in this pipeline, not a new one invented for this file.
+// `indices` is a REQUIRED field on `DigestData` (Task 9 hoisted it there —
+// see render.ts's DigestData doc comment — away from a v2-local optional
+// type), and the digest route DOES fetch it at send time: `getIndices()` is
+// called directly in src/app/api/digest/route.ts, immediately before
+// building each recipient's DigestData, raced against a 5s timeout (the
+// prep-phase cache it reads is 15-minute TTL and this route runs 90+
+// minutes later, so every read there is a cold, live Yahoo fan-out, not a
+// cache hit — see that route's own comment). An empty array is still a
+// fully legitimate value on either path — a timed-out or failed fetch
+// degrades to `[]` — and this whole strip still renders as '' for it, the
+// same "never fabricate, degrade in richness" rule chartUrl and commentary
+// follow elsewhere in this pipeline, not a new one invented for this file.
 export function indexStrip(indices: IndexCardData[]): string {
   if (indices.length === 0) return ''
   const n = indices.length

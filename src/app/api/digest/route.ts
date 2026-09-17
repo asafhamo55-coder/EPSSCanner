@@ -18,6 +18,7 @@ import {
 import { siteUrl } from '@/lib/site'
 import { db } from '@/lib/db'
 import { easternDate } from '@/lib/eastern'
+import { resolveTemplateOverride } from './resolve-template'
 
 // The TripleQ Daily Maily.
 //
@@ -110,6 +111,16 @@ export async function GET(req: NextRequest) {
   }
 
   const force = req.nextUrl.searchParams.get('force') === '1'
+  // `template=v2` previews the v2 renderer for THIS request only, without
+  // touching DIGEST_TEMPLATE — see renderDigest's doc comment in
+  // src/lib/email/render.ts for why that parameter exists at all. Honoured
+  // ONLY when `force` is also set: without that gate, `?template=v2` alone
+  // would let anyone redirect a REAL send (to the real subscriber list) to
+  // the unreviewed template, which is exactly the accidental-exposure risk
+  // this whole mechanism exists to avoid. `force` already redirects delivery
+  // to DIGEST_TEST_EMAIL, so pairing the two is what makes "preview v2
+  // safely" possible — see resolveTemplateOverride's own tests.
+  const templateOverride = resolveTemplateOverride(force, req.nextUrl.searchParams.get('template'))
   // `now=1` waives ONLY the clock guard: the real subscriber list, the day
   // claim and the recorded send all behave exactly as on a cron run. It exists
   // because a missed or failed cron would otherwise have no recovery path —
@@ -337,7 +348,7 @@ export async function GET(req: NextRequest) {
           commentary,
           indices,
         }
-        const mail = renderDigest(mailData)
+        const mail = renderDigest(mailData, templateOverride)
         const unsub = `${origin}/api/subscribe/unsubscribe?token=${encodeURIComponent(r.unsubscribeToken)}`
         return {
           to: r.email,
