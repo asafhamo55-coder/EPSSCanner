@@ -3,14 +3,19 @@
 // argument, no I/O, no Date math beyond formatting an already-computed label.
 //
 // `renderDigestV2` is dispatched to from `renderDigest()` in render.ts behind
-// the DIGEST_TEMPLATE flag (Task 9's job, not this file's). It accepts the
-// exact same `DigestData` v1 does, widened with an optional `indices` field
-// this file defines locally (see `DigestDataV2` below) — the digest route
-// does not thread IndexCardData through today, so that field is designed to
-// be ABSENT on every real call right now, and the whole index strip degrades
-// to nothing when it is. That is deliberate, not a placeholder: wiring
-// `indices` through the route is a follow-on change to render.ts's caller,
-// outside this file's brief, and nothing here breaks if it never happens.
+// the DIGEST_TEMPLATE flag (Task 9's job). It takes the same shared
+// `DigestData` type v1 does (defined in render.ts, imported below) — no local
+// widened type here anymore. Task 8 originally threaded the header index
+// strip's data through a `DigestDataV2` type declared locally in this file,
+// because it wasn't allowed to modify render.ts; that left a real hole, since
+// a plain `DigestData` (missing the `indices` key entirely) type-checked fine
+// against `DigestDataV2` too, so nothing would have caught a caller that
+// silently dropped the index strip. Task 9 closed that by hoisting `indices`
+// onto `DigestData` itself, required — every caller of `renderDigest` (v1 or
+// v2) must now supply it, even as an empty array. The digest route threads
+// the real thing through (see src/app/api/digest/route.ts); an empty array
+// just means this file's `indexStrip` renders nothing, same degrade-not-fail
+// rule the rest of this pipeline already follows.
 //
 // A handful of small pure helpers below (chipTone, valueTone, joinReasons,
 // logoUrl, smaMarkerPct, DRAWDOWN_DOMAIN_MAX) duplicate private (unexported)
@@ -25,19 +30,9 @@ import { bigUsd, marginPct, num, pct, ratio, usd } from '@/lib/format'
 import { deriveLevels, MAX_PICKS, MIN_MARKET_CAP, MIN_SCORE } from '@/lib/score'
 import type { SignalState } from '@/lib/signals'
 import type { Commentary } from '@/lib/ai/commentary'
-import type { IndexCardData } from '@/market-data/indices'
-import type { DigestData, DigestPick, DigestSelection } from './render'
+import type { DigestData, DigestPick, DigestSelection, RenderedEmail } from './render'
 import { chip, escapeHtml, FONT, meter, PALETTE, shell, type ChipTone } from './primitives'
 import { commentaryPanel, indexStrip, metricsGrid, technicalLevels, type MetricBlock } from './primitives-v2'
-
-/** `DigestData` plus the header index strip's data. Optional and additive —
- *  see the file banner. Structurally, a plain `DigestData` value (missing the
- *  key entirely) satisfies this type, so `renderDigest()`'s dispatcher in
- *  render.ts can call `renderDigestV2(data)` with the exact same `data` it
- *  passes to `renderDigestV1` without this file ever touching that file. */
-export interface DigestDataV2 extends DigestData {
-  indices?: IndexCardData[]
-}
 
 // ─── Duplicated-from-v1 pure helpers (see file banner) ─────────────
 function chipTone(state: SignalState): ChipTone {
@@ -257,13 +252,13 @@ function emptyState(selection: DigestSelection): string {
 </td></tr>`
 }
 
-export function renderDigestV2(data: DigestDataV2): { subject: string; html: string; text: string } {
+export function renderDigestV2(data: DigestData): RenderedEmail {
   const { picks } = data.selection
   const n = picks.length
   const first = data.recipient.firstName
   const unsubUrl = `${data.siteUrl}/api/subscribe/unsubscribe?token=${encodeURIComponent(data.recipient.unsubscribeToken)}`
   const commentary = data.commentary ?? null
-  const indices = data.indices ?? []
+  const indices = data.indices
 
   const subject =
     n === 0
@@ -298,9 +293,10 @@ export function renderDigestV2(data: DigestDataV2): { subject: string; html: str
   </table>
 </td></tr>`
 
-  // Absent on every call today — the digest route never threads IndexCardData
-  // through DigestData (see the file banner) — so this degrades to nothing,
-  // never a broken/empty-looking strip.
+  // `indices` is required on `DigestData` now (see the file banner), but an
+  // empty array is still a fully legitimate value — e.g. `getIndices()`
+  // failing and degrading to `[]` in the digest route — so this still
+  // degrades to nothing rather than a broken/empty-looking strip.
   const indexRow = indices.length ? `<tr><td style="padding:0 0 14px 0;">${indexStrip(indices)}</td></tr>` : ''
 
   const marketRead = commentary?.marketRead

@@ -4,8 +4,7 @@ import { publish } from '@/lib/publish'
 import { buildSelection, readPrep } from '@/lib/digest'
 import type { Selection } from '@/lib/score'
 import { toDigestPickRecord } from '@/lib/score'
-import { renderDigest, type DigestSelection } from '@/lib/email/render'
-import type { DigestDataV2 } from '@/lib/email/render-v2'
+import { renderDigest, type DigestData, type DigestSelection } from '@/lib/email/render'
 import type { Commentary } from '@/lib/ai/commentary'
 import { getIndices } from '@/market-data/indices'
 import { sendEmails, type EmailMessage } from '@/lib/email/send'
@@ -303,14 +302,12 @@ export async function GET(req: NextRequest) {
           }))
 
       const messages: EmailMessage[] = recipients.map((r) => {
-        // Typed as `DigestDataV2` (a strict superset of `DigestData`, defined
-        // in render-v2.ts) rather than as a fresh object literal against
-        // `renderDigest`'s `DigestData` parameter type — that's what lets
-        // `indices` ride along here without widening `DigestData` itself,
-        // which lives in render.ts and is out of this task's file list.
-        // `renderDigest` (still v1-only until the DIGEST_TEMPLATE dispatcher
-        // lands) simply ignores the extra field today; v2 reads it.
-        const mailData: DigestDataV2 = {
+        // `indices` is a required field on `DigestData` itself (Task 9
+        // hoisted it there from a render-v2.ts-local type — see render.ts's
+        // DigestData doc comment), so this literal has to supply it whether
+        // `renderDigest` ends up dispatching to v1 (which ignores it) or v2
+        // (which reads it for the header index strip).
+        const mailData: DigestData = {
           recipient: { firstName: r.firstName, unsubscribeToken: r.unsubscribeToken },
           selection,
           asOfLabel,

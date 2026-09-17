@@ -50,7 +50,8 @@ import {
   vsSma150Pct,
 } from '../src/lib/derive'
 import { renderConfirm } from '../src/lib/email/confirm'
-import { renderDigest, type DigestSelection } from '../src/lib/email/render'
+import { renderDigest, type DigestData, type DigestSelection } from '../src/lib/email/render'
+import { renderDigestV2 } from '../src/lib/email/render-v2'
 import type { PrepPickRecord } from '../src/lib/digest'
 import { PALETTE } from '../src/lib/email/primitives'
 import {
@@ -768,6 +769,7 @@ async function main() {
     selection: { picks: [rendererXssPick], considered: 1, belowCutoff: 0 },
     asOfLabel: 'Monday, 1 January 2026',
     siteUrl: 'https://example.com',
+    indices: [],
   }).html
   eq(
     rendererDigestXssHtml.includes('<script'),
@@ -780,6 +782,7 @@ async function main() {
     selection: { picks: [], considered: 12, belowCutoff: 2 },
     asOfLabel: 'Monday, 1 January 2026',
     siteUrl: 'https://example.com',
+    indices: [],
   })
   eq(
     rendererEmpty.subject,
@@ -815,6 +818,7 @@ async function main() {
     selection: { picks: [rendererNullPick], considered: 1, belowCutoff: 0 },
     asOfLabel: 'Monday, 1 January 2026',
     siteUrl: 'https://example.com',
+    indices: [],
   }).html
   eq(
     rendererNullHtml.includes('NaN%'),
@@ -830,6 +834,7 @@ async function main() {
     selection: capped,
     asOfLabel: 'Monday, 1 January 2026',
     siteUrl: 'https://example.com',
+    indices: [],
   }).html
   eq(rendererFullHtml.includes('<svg'), false, 'renderDigest: no inline SVG anywhere in the output')
   eq(rendererFullHtml.includes('display:flex'), false, 'renderDigest: no flexbox layout anywhere in the output')
@@ -910,6 +915,7 @@ async function main() {
     selection: rendererPrepSelection,
     asOfLabel: 'Monday, 1 January 2026',
     siteUrl: 'https://example.com',
+    indices: [],
     commentary: { marketRead: 'Markets steady.', perStock: { FRESH: 'Strong quarter.' } },
   })
 
@@ -958,6 +964,7 @@ async function main() {
     selection: { picks: [], considered: null, belowCutoff: null },
     asOfLabel: 'Monday, 1 January 2026',
     siteUrl: 'https://example.com',
+    indices: [],
     commentary: null,
   })
   eq(
@@ -970,6 +977,168 @@ async function main() {
     true,
     'renderDigest (prep row, empty): the null-considered empty state reads grammatically',
   )
+
+  // ── Email renderers — v2 template ────────────────────────────────
+  // Task 9's own coverage: renderDigestV2 called directly (not through the
+  // renderDigest() dispatcher), plus the dispatcher's DIGEST_TEMPLATE flag
+  // itself further down. `indices: []` is required on every call now that
+  // DigestData carries it (see render.ts) — that requirement is itself part
+  // of what this branch is verifying: a `DigestData` literal missing the key
+  // entirely no longer compiles.
+  console.log('\nEmail renderers — v2 template')
+
+  const rendererV2XssPick = toPick(evaluate(mk('XSS2', { name: rendererXssPayload })))
+  const rendererV2XssHtml = renderDigestV2({
+    recipient: { firstName: 'Test', unsubscribeToken: 'tok' },
+    selection: { picks: [rendererV2XssPick], considered: 1, belowCutoff: 0 },
+    asOfLabel: 'Monday, 1 January 2026',
+    siteUrl: 'https://example.com',
+    indices: [],
+  }).html
+  eq(
+    rendererV2XssHtml.includes('<script'),
+    false,
+    'renderDigestV2: an XSS payload in a pick name is escaped, not rendered as a tag',
+  )
+
+  // A broken <img> in a financial email is worse than no image, so a pick
+  // with no chartUrl must never emit the chart row. The card's LOGO <img> is
+  // unconditional (every card gets one, chartUrl or not), so the assertion
+  // targets the chart row's own alt text specifically — "no <img at all"
+  // would be true of no real digest and would pass by accident.
+  eq(
+    rendererV2XssHtml.includes('126-day price chart'),
+    false,
+    'renderDigestV2: a pick with no chartUrl emits no chart <img> (the always-present logo <img> is a separate element)',
+  )
+  // Control case proving the assertion above can actually fail: the same
+  // shape of pick WITH a chartUrl does emit the chart image.
+  const rendererV2ChartPick = toPick(
+    evaluate(mk('V2CHART', { chartUrl: 'https://example.com/chart/V2CHART.png' })),
+  )
+  const rendererV2ChartHtml = renderDigestV2({
+    recipient: { firstName: 'Test', unsubscribeToken: 'tok' },
+    selection: { picks: [rendererV2ChartPick], considered: 1, belowCutoff: 0 },
+    asOfLabel: 'Monday, 1 January 2026',
+    siteUrl: 'https://example.com',
+    indices: [],
+  }).html
+  eq(
+    rendererV2ChartHtml.includes('126-day price chart'),
+    true,
+    'renderDigestV2: a pick WITH a chartUrl does emit the chart <img> (control case for the assertion above)',
+  )
+
+  // Same email-client constraints as v1: no inline SVG (Gmail strips it), no
+  // flex/grid (neither Gmail nor Word-rendered Outlook can be trusted with
+  // it). Uses `capped` (MAX_PICKS worth of picks, defined above) plus real
+  // commentary so every block in cardV2 — metrics grid, technical levels,
+  // per-stock AI panel — actually renders and gets checked, not just an
+  // empty shell.
+  const rendererV2FullHtml = renderDigestV2({
+    recipient: { firstName: 'Test', unsubscribeToken: 'tok' },
+    selection: capped,
+    asOfLabel: 'Monday, 1 January 2026',
+    siteUrl: 'https://example.com',
+    indices: [],
+    commentary: { marketRead: 'Broad markets are firm into the open.', perStock: { T00: 'Strong quarter.' } },
+  }).html
+  eq(rendererV2FullHtml.includes('<svg'), false, 'renderDigestV2: no inline SVG anywhere in the output')
+  eq(
+    rendererV2FullHtml.includes('display:flex'),
+    false,
+    'renderDigestV2: no flexbox layout anywhere in the output',
+  )
+  eq(
+    rendererV2FullHtml.includes('display:grid'),
+    false,
+    'renderDigestV2: no grid layout anywhere in the output',
+  )
+
+  // `considered: null` must never fabricate a denominator. Asserted two ways:
+  // the literal "of null" never appears, AND (able to actually fail, unlike
+  // a "did not throw" check) the header degrades to the exact denominator-
+  // free sentence — if the null branch were ever skipped, this exact string
+  // would not appear because the numbered branch would render instead.
+  const rendererV2ConsideredNullHtml = renderDigestV2({
+    recipient: { firstName: 'Test', unsubscribeToken: 'tok' },
+    selection: { picks: [rendererV2XssPick], considered: null, belowCutoff: null },
+    asOfLabel: 'Monday, 1 January 2026',
+    siteUrl: 'https://example.com',
+    indices: [],
+  }).html
+  eq(
+    rendererV2ConsideredNullHtml.includes('of null'),
+    false,
+    'renderDigestV2: a null considered never prints a fabricated "of null" denominator',
+  )
+  eq(
+    rendererV2ConsideredNullHtml.includes(
+      `1 setup cleared the entry gate and scored ${MIN_SCORE} or better today. Ranked best first, ${MAX_PICKS} maximum.`,
+    ),
+    true,
+    'renderDigestV2: a null considered degrades the header to the denominator-free sentence',
+  )
+
+  // ── Email renderers — the DIGEST_TEMPLATE flag ───────────────────
+  // The default matters more than anything else in this task: 13 real
+  // subscribers receive v1 today, and DIGEST_TEMPLATE unset must keep it
+  // that way. Structural marker, not incidental text: "📐 Technical levels"
+  // is the technical-levels panel's own heading, unique to v2's markup (see
+  // primitives-v2.ts) and rendered unconditionally whenever a card renders —
+  // its presence/absence is a direct read on which template actually ran.
+  console.log('\nEmail renderers — the DIGEST_TEMPLATE flag')
+
+  const rendererFlagPick = toPick(evaluate(mk('FLAG', {})))
+  const rendererFlagData: DigestData = {
+    recipient: { firstName: 'Test', unsubscribeToken: 'tok' },
+    selection: { picks: [rendererFlagPick], considered: 1, belowCutoff: 0 },
+    asOfLabel: 'Monday, 1 January 2026',
+    siteUrl: 'https://example.com',
+    indices: [],
+  }
+  const V2_MARKER = '📐 Technical levels'
+  const originalDigestTemplate = process.env.DIGEST_TEMPLATE
+
+  delete process.env.DIGEST_TEMPLATE
+  eq(
+    renderDigest(rendererFlagData).html.includes(V2_MARKER),
+    false,
+    'renderDigest: DIGEST_TEMPLATE unset dispatches to v1 — the v2-only technical-levels panel is absent',
+  )
+
+  process.env.DIGEST_TEMPLATE = 'v2'
+  eq(
+    renderDigest(rendererFlagData).html.includes(V2_MARKER),
+    true,
+    "renderDigest: DIGEST_TEMPLATE='v2' dispatches to v2 — the technical-levels panel is present",
+  )
+
+  // Ambiguity resolved in the brief: anything other than exactly 'v2' fails
+  // safe to v1 rather than throwing or falling through to the new template.
+  process.env.DIGEST_TEMPLATE = 'v3'
+  eq(
+    renderDigest(rendererFlagData).html.includes(V2_MARKER),
+    false,
+    "renderDigest: an unrecognised DIGEST_TEMPLATE ('v3') fails safe to v1, not v2",
+  )
+  process.env.DIGEST_TEMPLATE = ''
+  eq(
+    renderDigest(rendererFlagData).html.includes(V2_MARKER),
+    false,
+    'renderDigest: DIGEST_TEMPLATE set to the empty string falls back to v1, same as unset',
+  )
+
+  // Whitespace and case are normalised before comparison.
+  process.env.DIGEST_TEMPLATE = ' V2 '
+  eq(
+    renderDigest(rendererFlagData).html.includes(V2_MARKER),
+    true,
+    "renderDigest: DIGEST_TEMPLATE=' V2 ' still matches (trimmed + lowercased) and dispatches to v2",
+  )
+
+  if (originalDigestTemplate === undefined) delete process.env.DIGEST_TEMPLATE
+  else process.env.DIGEST_TEMPLATE = originalDigestTemplate
 
   // ── AI commentary — grounding guard ───────────────────────────────
   console.log('\nAI commentary — grounding guard')

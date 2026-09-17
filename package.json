@@ -9,7 +9,8 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "test": "tsx scripts/test-signals.ts",
-    "preview:digest": "tsx scripts/preview-digest.ts"
+    "preview:digest": "tsx scripts/preview-digest.ts",
+    "preview:digest:v2": "tsx scripts/preview-digest-v2.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.126.0",

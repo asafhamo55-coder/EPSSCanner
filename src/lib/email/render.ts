@@ -16,6 +16,7 @@ import type { SignalState } from '@/lib/signals'
 // rather than assume every pick it receives was just computed.
 import type { PrepPickRecord } from '@/lib/digest'
 import type { Commentary } from '@/lib/ai/commentary'
+import type { IndexCardData } from '@/market-data/indices'
 import {
   bar,
   chip,
@@ -28,6 +29,13 @@ import {
   type ChipTone,
   shell,
 } from './primitives'
+// Value import, not just a type — the dispatcher below calls this directly.
+// render-v2.ts imports back from this file too, but only `import type`
+// (DigestData/DigestPick/DigestSelection), which is erased at compile time,
+// so there is no runtime circular dependency: render.ts requires
+// render-v2.ts, render-v2.ts requires nothing back from render.ts at
+// runtime.
+import { renderDigestV2 } from './render-v2'
 
 export interface DigestRecipient {
   firstName: string
@@ -64,6 +72,24 @@ export interface DigestData {
    *  v1's markup today — threaded through so it reaches the template without
    *  route.ts needing to know which template is active (see Task 8/9). */
   commentary?: Commentary | null
+  /** Header index-strip data (Russell/Nasdaq/S&P cards). Required, not
+   *  optional: this field used to live only on render-v2.ts's own local
+   *  `DigestDataV2` type, which meant a plain `DigestData` (missing the key
+   *  entirely) type-checked fine as an argument to `renderDigestV2` and the
+   *  index strip would silently render as nothing — no compiler error, no
+   *  runtime error, just a quietly incomplete email every morning. Hoisting
+   *  it here, required, makes that impossible: every caller of `renderDigest`
+   *  (v1 or v2) must supply this array, even if empty. Unused by v1's markup
+   *  today, same as `commentary` above. An empty array is a legitimate,
+   *  fully-supported value — v2's index strip degrades to nothing rather
+   *  than a broken/empty-looking row (see indexStrip in primitives-v2.ts). */
+  indices: IndexCardData[]
+}
+
+export interface RenderedEmail {
+  subject: string
+  html: string
+  text: string
 }
 
 /** The drawdown factor's domain is [0, last knot] — the same curve
@@ -264,7 +290,9 @@ function emptyState(selection: DigestSelection): string {
 </td></tr>`
 }
 
-export function renderDigest(data: DigestData): { subject: string; html: string; text: string } {
+/** v1's markup, unchanged in behaviour — this was `renderDigest` itself
+ *  before Task 9 put a dispatcher in front of it (see `renderDigest` below). */
+export function renderDigestV1(data: DigestData): RenderedEmail {
   const { picks } = data.selection
   const n = picks.length
   const first = data.recipient.firstName
@@ -355,4 +383,16 @@ export function renderDigest(data: DigestData): { subject: string; html: string;
     html: shell({ title: subject, preheader, bodyHtml: body, footerLinksHtml: footerLinks }),
     text,
   }
+}
+
+/** v1 unless DIGEST_TEMPLATE is exactly 'v2'. The default is deliberate: a
+ *  deploy that forgets the flag must not change what subscribers receive —
+ *  there are 13 real subscribers on v1 today, and reverting a bad v2 rollout
+ *  has to be an env-var change, not a code deploy. Any value other than
+ *  exactly 'v2' (missing, empty, mistyped, or anything else) fails safe to
+ *  v1 rather than throwing or falling through to the new template. */
+export function renderDigest(data: DigestData): RenderedEmail {
+  return (process.env.DIGEST_TEMPLATE || 'v1').trim().toLowerCase() === 'v2'
+    ? renderDigestV2(data)
+    : renderDigestV1(data)
 }
