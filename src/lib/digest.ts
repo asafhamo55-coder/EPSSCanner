@@ -231,16 +231,33 @@ export interface Prep {
 }
 
 /** Runs the full preparation phase for one Eastern calendar date and upserts
- *  the result to screener_digest_prep, keyed on `prepOn`. Order: score →
- *  render and upload a chart per pick → one Claude commentary call → upsert.
- *  Each stage after scoring is independently best-effort so a later failure
- *  still persists whatever the earlier stages produced — the digest cron
- *  should always have a row to read, even a degraded one.
+ *  the result to screener_digest_prep, keyed on `prepOn`. Order: check for an
+ *  already-complete row → score → render and upload a chart per pick → one
+ *  Claude commentary call → upsert. Each stage after scoring is
+ *  independently best-effort so a later failure still persists whatever the
+ *  earlier stages produced — the digest cron should always have a row to
+ *  read, even a degraded one.
  *
  *  `buildSelection()` is NOT guarded here: an empty watchlist means there is
  *  nothing to prepare, and that failure is meant to surface — the caller
  *  already wraps this whole call in `.catch()` for exactly that case. */
 export async function prepareDigest(prepOn: string): Promise<PrepResult> {
+  // Idempotent for the day. The upsert at the end of this function OVERWRITES
+  // screener_digest_prep (`onConflict: 'prep_on'`), so without this early
+  // return a retried or duplicated invocation for the same Eastern date would
+  // silently redo the expensive half of this phase — re-render every chart,
+  // re-upload each PNG, and re-run the one paid `claude-opus-5` call — purely
+  // to overwrite a row that already has that exact content. A prior row only
+  // counts as "done" when it actually has picks AND the AI stage completed
+  // (`ai_ok`); a prior degraded run (e.g. it lost the AI race, or timed out
+  // before charts finished) is deliberately NOT treated as done, so a retry
+  // can still improve on it rather than freezing today's row at its worst
+  // outcome.
+  const existing = await readPrep(prepOn)
+  if (existing && existing.picks.length > 0 && existing.aiOk) {
+    return { ok: true, picks: existing.picks.length, chartsRendered: existing.chartCount, aiOk: existing.aiOk }
+  }
+
   const deadline = Date.now() + PREP_BUDGET_MS
 
   const selection = await buildSelection()

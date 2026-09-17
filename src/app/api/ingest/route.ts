@@ -17,11 +17,23 @@ import { easternDate } from '@/lib/eastern'
 // daily GET passes the same check.
 //
 // Deliberately OPTIONAL here, unlike /api/digest's identically-named
-// authorized(), which fails CLOSED (401) when CRON_SECRET is unset. This
-// route spends no money and sends no mail — an unauthenticated ingest just
-// re-pulls public fundamentals — so it can stay open. /api/digest cannot:
-// an open digest endpoint is an open "mail the whole list" button that also
-// leaks the subscriber count in its JSON response.
+// authorized(), which fails CLOSED (401) when CRON_SECRET is unset. An
+// unauthenticated GET/POST here still does real work — it re-pulls public
+// fundamentals and warms the technicals cache — but that work spends no
+// money and sends no mail, so it's safe to leave open.
+//
+// What is NOT safe to leave open: prepareDigest (called below), which
+// renders a PNG per pick, uploads each to Storage, and makes one paid
+// `claude-opus-5` call. That's why the call to it further down is gated
+// separately on `process.env.CRON_SECRET` actually being set — this
+// function returning `true` is not proof of who's calling when the secret
+// is unset (it returns `true` for EVERY caller in that case), so it cannot
+// be trusted to authorize spending money. See the comment at that gate.
+//
+// /api/digest can't take the same "stay open, gate the expensive part"
+// approach: its entire job IS the expensive part (a real Resend send to the
+// whole list), so it fails closed outright — and an open digest endpoint
+// would also leak the subscriber count in its JSON response.
 function authorized(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET
   if (!secret) return true
@@ -93,10 +105,25 @@ export async function GET(req: NextRequest) {
     // best-effort for the same reason warming is — a preparation failure must
     // never fail an ingest that already succeeded, and the digest route falls
     // back to scoring inline when the row is absent.
-    const prep = await prepareDigest(easternDate(new Date())).catch((e) => {
-      console.error(`[prep] failed: ${(e as Error).message}`)
-      return null
-    })
+    //
+    // Gated on CRON_SECRET being SET — deliberately NOT on `authorized(req)`
+    // having returned true, because those are different questions here.
+    // authorized() returns true for every caller when CRON_SECRET is unset
+    // (this route's fail-OPEN default, see the comment above authorized()),
+    // so "authorized() passed" proves nothing about who is calling.
+    // prepareDigest is the one thing in this route that spends real money —
+    // it renders a chart PNG per pick, uploads each to Storage, and makes
+    // one paid `claude-opus-5` call (up to 8000 tokens) — so until an
+    // operator sets CRON_SECRET, nobody, including whoever finds this URL,
+    // can trigger that spend by hitting it. Once the secret is set,
+    // authorized() is a real check again and this condition is redundant
+    // with it, but harmless to keep.
+    const prep = process.env.CRON_SECRET
+      ? await prepareDigest(easternDate(new Date())).catch((e) => {
+          console.error(`[prep] failed: ${(e as Error).message}`)
+          return null
+        })
+      : null
     return NextResponse.json({
       ok: true,
       refreshed: results.length,

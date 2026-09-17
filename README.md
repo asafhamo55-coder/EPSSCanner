@@ -88,8 +88,12 @@ only `vercel.json`.
 
 Vercel automatically sends `CRON_SECRET` as a Bearer token on both. Nothing
 else to wire — but you must set it: `/api/digest` returns 401 and refuses to
-run without it (`/api/ingest` tolerates it being unset; `/api/digest` does
-not, because it spends money on a Yahoo fan-out and a real Resend send).
+run without it, because it spends money on a Yahoo fan-out and a real Resend
+send. `/api/ingest` tolerates it being unset for its own core job (re-pulling
+public fundamentals, which costs nothing) — but it also runs preparation for
+the Daily Maily v2 email (chart rendering, a Storage upload, and a paid
+Claude call), and that specific step only runs when `CRON_SECRET` is set, so
+an unauthenticated `/api/ingest` request can never trigger it either.
 
 > **Note on live data:** FMP's free tier doesn't expose forward P/E, so **Step 5
 > shows N/A** on live data until you add a forward-EPS source or upgrade FMP.
