@@ -61,6 +61,7 @@ import {
   WEIGHTS,
   type ScoreInput,
 } from '../src/lib/score'
+import { buildPayload, isGrounded, numericTokens } from '../src/lib/ai/prompt'
 
 let failures = 0
 
@@ -830,6 +831,37 @@ async function main() {
   eq(rendererFullHtml.includes('<svg'), false, 'renderDigest: no inline SVG anywhere in the output')
   eq(rendererFullHtml.includes('display:flex'), false, 'renderDigest: no flexbox layout anywhere in the output')
   eq(rendererFullHtml.includes('display:grid'), false, 'renderDigest: no grid layout anywhere in the output')
+
+  // ── AI commentary — grounding guard ───────────────────────────────
+  console.log('\nAI commentary — grounding guard')
+  const perfectPickForPrompt = toPick(evaluate(perfect))
+  const gPayload = buildPayload(
+    [{ ...perfectPickForPrompt }],
+    [{ key: 'sp500', name: 'S&P 500', ytdPct: 12.4, trailingPe: 24.1, forwardPe: 21.0 }],
+  )
+  eq(
+    isGrounded('AAA sits at 100.0 with the S&P 500 up 12.4% this year.', gPayload),
+    true,
+    'grounding: prose using only supplied figures passes',
+  )
+  eq(
+    isGrounded('AAA rallied to $412.50 on heavy volume.', gPayload),
+    false,
+    'grounding: an invented figure is rejected',
+  )
+  eq(
+    isGrounded('Momentum is constructive and breadth is improving.', gPayload),
+    true,
+    'grounding: prose with no figures passes',
+  )
+  // Regex-only extraction reads "12.4" as one token, "100" as one, "109" as
+  // one — three numeric literals, not four; the brief's worked example
+  // assumed each digit run split further. Documented in the Task 5 report.
+  eq(
+    numericTokens('up 12.4% from $100 to 109').length,
+    3,
+    'numericTokens: extracts every numeric token',
+  )
 
   // ── Derivations: momentum, range, surprise ───────────────────────
   console.log('\nDerivations — momentum and range')

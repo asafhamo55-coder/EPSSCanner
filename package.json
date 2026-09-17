@@ -12,6 +12,7 @@
     "preview:digest": "tsx scripts/preview-digest.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.126.0",
     "@napi-rs/canvas": "^1.0.9",
     "@radix-ui/react-avatar": "^1.1.0",
     "@radix-ui/react-dialog": "^1.1.0",
