@@ -206,7 +206,7 @@ export interface IngestRun {
  *  (WARM_CONCURRENCY is 8). Raise only with evidence from provider responses,
  *  not by assumption: a 429 storm degrades the refresh far worse than a slow
  *  one. */
-const INGEST_CONCURRENCY = 3
+const INGEST_CONCURRENCY = 4
 
 export async function ingestAllActive(deadline?: number): Promise<IngestRun> {
   const supabase = db()
@@ -217,7 +217,21 @@ export async function ingestAllActive(deadline?: number): Promise<IngestRun> {
     .is('deleted_at', null)
   if (error) throw new Error(`Failed to list active tickers: ${error.message}`)
 
-  const symbols = ((data ?? []) as { symbol: string }[]).map((r) => r.symbol)
+  const all = ((data ?? []) as { symbol: string }[]).map((r) => r.symbol)
+
+  // Rotate the starting point by the day of the year.
+  //
+  // The query returns symbols in a stable order, and the deadline below cuts
+  // the run off at whatever it has reached. Without this rotation the SAME
+  // tail is truncated every single day — those tickers would never refresh
+  // again, and nothing would report it as anything worse than the `skipped`
+  // count a truncated run always has. Rotating spreads the truncation so
+  // every symbol reaches the front of the queue within a full cycle.
+  const dayOfYear = Math.floor(
+    (Date.now() - Date.UTC(new Date().getUTCFullYear(), 0, 0)) / 86_400_000,
+  )
+  const offset = all.length > 0 ? dayOfYear % all.length : 0
+  const symbols = [...all.slice(offset), ...all.slice(0, offset)]
 
   // Bounded concurrency AND a deadline — neither of which this had.
   //

@@ -87,8 +87,14 @@ const ROUTE_BUDGET_MS = 55_000
  *  with no ceiling at all, so a slow or rate-limited provider simply ate the
  *  whole function and the platform killed it — data published, nothing
  *  prepared, and a 504 with no body to diagnose from. Tickers past this
- *  deadline are reported as `skipped`, not silently dropped. */
-const INGEST_BUDGET_MS = 30_000
+ *  deadline are reported as `skipped`, not silently dropped — and
+ *  ingestAllActive rotates its starting point daily so a truncated run does
+ *  not starve the same tail forever.
+ *
+ *  35s of the route's 55s. A measured run prepared 5 picks and 5 charts in
+ *  roughly 7s, well inside the 18s PREP_MIN_MS floor that the remaining 20s
+ *  clears. */
+const INGEST_BUDGET_MS = 35_000
 
 async function warmTechnicals(symbols: string[]): Promise<{ warmed: number; skipped: number }> {
   const deadline = Date.now() + WARM_BUDGET_MS
