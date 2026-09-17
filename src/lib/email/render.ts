@@ -3,9 +3,20 @@
 // without a network or a database.
 
 import { bigUsd, num, pct, usd } from '@/lib/format'
-import type { ScoredPick, Selection } from '@/lib/score'
+import type { ScoredPick } from '@/lib/score'
 import { DRAWDOWN_KNOTS, MAX_PICKS, MIN_MARKET_CAP, MIN_SCORE, SMA_ZERO_AT_PCT } from '@/lib/score'
 import type { SignalState } from '@/lib/signals'
+// `PrepPickRecord` is the shape screener_digest_prep actually persists per
+// pick (see src/lib/digest.ts): a `toDigestPickRecord` projection of a
+// ScoredPick plus `chartUrl`. It is NOT a ScoredPick — it carries none of
+// `gates`/`passedGates`/`reasons`/`input`/`positionPct`/`retracement`, which
+// only exist on the in-memory object scoring produces. The digest route's
+// prepared-row path (Task 7) reads this shape back from the database, so
+// this renderer has to accept it as an alternative to a full ScoredPick
+// rather than assume every pick it receives was just computed.
+import type { PrepPickRecord } from '@/lib/digest'
+import type { Commentary } from '@/lib/ai/commentary'
+import type { IndexCardData } from '@/market-data/indices'
 import {
   bar,
   chip,
@@ -18,19 +29,67 @@ import {
   type ChipTone,
   shell,
 } from './primitives'
+// Value import, not just a type — the dispatcher below calls this directly.
+// render-v2.ts imports back from this file too, but only `import type`
+// (DigestData/DigestPick/DigestSelection), which is erased at compile time,
+// so there is no runtime circular dependency: render.ts requires
+// render-v2.ts, render-v2.ts requires nothing back from render.ts at
+// runtime.
+import { renderDigestV2 } from './render-v2'
 
 export interface DigestRecipient {
   firstName: string
   unsubscribeToken: string
 }
 
+/** A pick as this renderer can receive it: either a freshly-scored
+ *  `ScoredPick` (the fallback path, or v1 today) or a `PrepPickRecord` read
+ *  back from screener_digest_prep (the prepared path). See the import note
+ *  above for exactly which fields the latter is missing. */
+export type DigestPick = ScoredPick | PrepPickRecord
+
+export interface DigestSelection {
+  picks: DigestPick[]
+  /** How many tickers were fed in. Null on the prepared path: the prep row
+   *  does not persist this count (it is not part of the audit projection),
+   *  so the copy below degrades to a less specific sentence rather than
+   *  showing a number that isn't there. */
+  considered: number | null
+  /** How many passed every gate but fell below MIN_SCORE. Same nullability
+   *  reason as `considered`. */
+  belowCutoff: number | null
+}
+
 export interface DigestData {
   recipient: DigestRecipient
-  selection: Selection
+  selection: DigestSelection
   /** Already-formatted Eastern date, e.g. "Monday, 14 September 2026". */
   asOfLabel: string
   /** Absolute origin for ticker / unsubscribe links, no trailing slash. */
   siteUrl: string
+  /** AI market commentary from the prepared row, or null on the fallback
+   *  path (no prep) or when the AI stage was skipped/timed out. Unused by
+   *  v1's markup today — threaded through so it reaches the template without
+   *  route.ts needing to know which template is active (see Task 8/9). */
+  commentary?: Commentary | null
+  /** Header index-strip data (Russell/Nasdaq/S&P cards). Required, not
+   *  optional: this field used to live only on render-v2.ts's own local
+   *  `DigestDataV2` type, which meant a plain `DigestData` (missing the key
+   *  entirely) type-checked fine as an argument to `renderDigestV2` and the
+   *  index strip would silently render as nothing — no compiler error, no
+   *  runtime error, just a quietly incomplete email every morning. Hoisting
+   *  it here, required, makes that impossible: every caller of `renderDigest`
+   *  (v1 or v2) must supply this array, even if empty. Unused by v1's markup
+   *  today, same as `commentary` above. An empty array is a legitimate,
+   *  fully-supported value — v2's index strip degrades to nothing rather
+   *  than a broken/empty-looking row (see indexStrip in primitives-v2.ts). */
+  indices: IndexCardData[]
+}
+
+export interface RenderedEmail {
+  subject: string
+  html: string
+  text: string
 }
 
 /** The drawdown factor's domain is [0, last knot] — the same curve
@@ -58,7 +117,25 @@ function chipTone(state: SignalState): ChipTone {
   if (state === 'pass') return 'positive'
   if (state === 'turnaround') return 'info'
   if (state === 'flag') return 'warning'
-  return 'negative' // 'fail' | 'na'
+  // 'fail' | 'na'. Note: 'na' cannot actually reach this function today —
+  // runGates' isGreen (score.ts) requires `state !== 'na' && pct > 0` for
+  // BOTH the YoY and NTM gates, so any pick carrying 'na' on either signal
+  // fails that gate and never clears into selectPicks' output, let alone
+  // this renderer. Mapped to 'negative' anyway, deliberately: this is
+  // defensive completeness for if that gate relationship ever changes, not
+  // dead code to delete.
+  return 'negative'
+}
+
+/** Chip tone for a `PrepPickRecord`, which carries the raw YoY/NTM percentage
+ *  but not the `SignalState` `chipTone` above reads (that lives only on the
+ *  in-memory `ScoreInput`, never persisted to screener_digest_prep). Colours
+ *  on the sign of the value instead — the same convention the CAGR chip
+ *  below already uses, since CAGR has no SignalState of its own either. This
+ *  loses the 'flag' (soft-positive) amber and 'turnaround' blue nuance, but
+ *  never colours a positive value as negative or vice versa. */
+function valueTone(pct: number | null): ChipTone {
+  return (pct ?? 0) > 0 ? 'positive' : 'negative'
 }
 
 /** Join reasons as a proper list: "a.", "a and b.", or "a, b, and c." — not
@@ -76,11 +153,32 @@ function logoUrl(symbol: string): string {
 /** EPS CAGR has no SignalState of its own — score.ts derives it algebraically
  *  from PEG (see epsCagr5yr in derive.ts), not from signals.ts — so its chip
  *  below stays coloured on the sign of the value, unlike YoY/NTM. */
-function card(p: ScoredPick, rank: number, siteUrl: string): string {
+function card(p: DigestPick, rank: number, siteUrl: string): string {
+  // `reasons`, `positionPct`, `retracement`, `yoyState` and `ntmState` are
+  // part of `DigestPickRecord` since Task 7's fix round 1 (see score.ts), so
+  // a `PrepPickRecord` read back from screener_digest_prep carries all five
+  // — a ScoredPick carries the state pair nested under `input` instead. The
+  // `'x' in p` checks below are NOT type-narrowing noise: `picks` is a jsonb
+  // column, and a row written before that fix round genuinely lacks these
+  // keys at runtime even though the TS type now claims they're required, so
+  // this is real defence against old data, not just satisfying the
+  // compiler. Falling back to a neutral/absent rendering for each on such a
+  // row is a richness degradation, never a wrong one: the reason text falls
+  // back to the same generic sentence already used when a ScoredPick happens
+  // to have no reasons, the bars render "n/a"/empty for a null
+  // positionPct/retracement, and the chip tone falls back to colouring by
+  // the sign of the value (see valueTone) rather than by SignalState.
+  const reasons = 'reasons' in p && p.reasons ? p.reasons : []
+  const positionPct = 'positionPct' in p ? p.positionPct : null
+  const retracement = 'retracement' in p ? p.retracement : null
+  const yoyState: SignalState | undefined = 'input' in p ? p.input.yoyState : p.yoyState
+  const ntmState: SignalState | undefined = 'input' in p ? p.input.ntmState : p.ntmState
+  const yoyTone = yoyState ? chipTone(yoyState) : valueTone(p.yoyPct)
+  const ntmTone = ntmState ? chipTone(ntmState) : valueTone(p.ntmPct)
   const href = `${siteUrl}/ticker/${encodeURIComponent(p.symbol)}`
-  const reason = p.reasons.length
+  const reason = reasons.length
     ? (() => {
-        const joined = joinReasons(p.reasons)
+        const joined = joinReasons(reasons)
         return `${joined.charAt(0).toUpperCase()}${joined.slice(1)}.`
       })()
     : 'Cleared every entry gate.'
@@ -125,8 +223,8 @@ function card(p: ScoredPick, rank: number, siteUrl: string): string {
       <td style="padding:0 18px 4px 18px;">
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
           <tr>
-            ${chip({ label: '📈 YoY EPS', value: pct(p.yoyPct, 0), tone: chipTone(p.input.yoyState) })}
-            ${chip({ label: '🔮 NTM EPS', value: pct(p.ntmPct, 0), tone: chipTone(p.input.ntmState) })}
+            ${chip({ label: '📈 YoY EPS', value: pct(p.yoyPct, 0), tone: yoyTone })}
+            ${chip({ label: '🔮 NTM EPS', value: pct(p.ntmPct, 0), tone: ntmTone })}
             ${chip({ label: '🚀 CAGR 5y', value: pct(p.epsCagr5yr, 0), tone: (p.epsCagr5yr ?? 0) > 0 ? 'positive' : 'negative' })}
           </tr>
         </table>
@@ -145,13 +243,13 @@ function card(p: ScoredPick, rank: number, siteUrl: string): string {
         ${bar({
           label: '🎯 Tunnel position (lower is better)',
           value:
-            p.positionPct == null
+            positionPct == null
               ? 'n/a'
-              : `${Math.max(0, Math.min(100, p.positionPct)).toFixed(0)}% up the channel`,
-          fillPct: p.positionPct == null ? 0 : 100 - Math.max(0, Math.min(100, p.positionPct)),
+              : `${Math.max(0, Math.min(100, positionPct)).toFixed(0)}% up the channel`,
+          fillPct: positionPct == null ? 0 : 100 - Math.max(0, Math.min(100, positionPct)),
           color: PALETTE.positive,
         })}
-        ${goldenBand({ ratio: p.retracement })}
+        ${goldenBand({ ratio: retracement })}
         ${bar({
           label: '🏔️ Room below the all-time high',
           value: pct(p.pctFromAth),
@@ -173,13 +271,23 @@ function card(p: ScoredPick, rank: number, siteUrl: string): string {
 </td></tr>`
 }
 
-function emptyState(selection: Selection): string {
+function emptyState(selection: DigestSelection): string {
+  // `selection.considered` is null on a prepared row written before
+  // migration 0031 added the column — degrade to a sentence that doesn't
+  // name a watchlist size rather than print "Of null names". (Note: "No
+  // name both passed..." doesn't parse — "no name" is singular, "both"
+  // wants a plural subject — so the null branch drops "both" entirely
+  // rather than trying to force it in.)
+  const intro =
+    selection.considered != null
+      ? `Of ${selection.considered} names on the watchlist, none both passed every entry gate`
+      : `Nothing passed every entry gate`
   return `
 <tr><td style="padding:0 0 14px 0;">
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:${PALETTE.surface};border:1px solid ${PALETTE.line};border-radius:12px;">
     <tr><td style="padding:28px 24px;font:400 14px ${FONT};color:${PALETTE.body};line-height:1.7;">
       <span style="font:700 16px ${FONT};color:${PALETTE.ink};">🫗 Nothing cleared the bar this morning.</span><br><br>
-      Of ${selection.considered} names on the watchlist, none both passed every entry gate
+      ${intro}
       (market cap over $${(MIN_MARKET_CAP / 1e9).toFixed(0)}B, positive YoY EPS, positive NTM EPS growth,
       positive 5-year expected EPS CAGR, trading below its all-time high) and scored at least
       ${MIN_SCORE}/100.<br><br>
@@ -189,7 +297,9 @@ function emptyState(selection: Selection): string {
 </td></tr>`
 }
 
-export function renderDigest(data: DigestData): { subject: string; html: string; text: string } {
+/** v1's markup, unchanged in behaviour — this was `renderDigest` itself
+ *  before Task 9 put a dispatcher in front of it (see `renderDigest` below). */
+export function renderDigestV1(data: DigestData): RenderedEmail {
   const { picks } = data.selection
   const n = picks.length
   const first = data.recipient.firstName
@@ -202,7 +312,9 @@ export function renderDigest(data: DigestData): { subject: string; html: string;
 
   const preheader =
     n === 0
-      ? `None of ${data.selection.considered} watchlist names cleared the entry gate this morning.`
+      ? data.selection.considered != null
+        ? `None of ${data.selection.considered} watchlist names cleared the entry gate this morning.`
+        : `Nothing cleared the entry gate this morning.`
       : `${picks.map((p) => p.symbol).join(', ')} — scored before the open.`
 
   const header = `
@@ -229,8 +341,12 @@ export function renderDigest(data: DigestData): { subject: string; html: string;
   <span style="font:700 16px ${FONT};color:${PALETTE.ink};">☀️ Good morning, ${escapeHtml(first)}.</span><br>
   ${
     n === 0
-      ? `None of ${data.selection.considered} watchlist names cleared this morning's entry gate.`
-      : `${n} of ${data.selection.considered} watchlist names cleared the entry gate and scored ${MIN_SCORE} or better${data.selection.belowCutoff > 0 ? `; ${data.selection.belowCutoff} more passed the gate but fell short on score` : ''}. Ranked best first, ${MAX_PICKS} maximum.`
+      ? data.selection.considered != null
+        ? `None of ${data.selection.considered} watchlist names cleared this morning's entry gate.`
+        : `Nothing cleared this morning's entry gate.`
+      : data.selection.considered != null
+        ? `${n} of ${data.selection.considered} watchlist names cleared the entry gate and scored ${MIN_SCORE} or better${(data.selection.belowCutoff ?? 0) > 0 ? `; ${data.selection.belowCutoff} more passed the gate but fell short on score` : ''}. Ranked best first, ${MAX_PICKS} maximum.`
+        : `${n} setup${n === 1 ? '' : 's'} cleared the entry gate and scored ${MIN_SCORE} or better today. Ranked best first, ${MAX_PICKS} maximum.`
   }
 </td></tr>`
 
@@ -246,17 +362,21 @@ export function renderDigest(data: DigestData): { subject: string; html: string;
     `Good morning, ${first}.`,
     ``,
     n === 0
-      ? `None of ${data.selection.considered} watchlist names cleared this morning's entry gate.`
+      ? data.selection.considered != null
+        ? `None of ${data.selection.considered} watchlist names cleared this morning's entry gate.`
+        : `Nothing cleared this morning's entry gate.`
       : picks
-          .map(
-            (p, i) =>
+          .map((p, i) => {
+            const reasons = 'reasons' in p && p.reasons ? p.reasons : []
+            return (
               `${i + 1}. ${p.symbol} (${p.name ?? ''}) — ${p.score.toFixed(1)}/100\n` +
               `   Price ${usd(p.price)} · Market cap ${bigUsd(p.marketCap)} · P/E ${num(p.trailingPe, 1)}\n` +
               `   YoY EPS ${pct(p.yoyPct, 0)} · NTM ${pct(p.ntmPct, 0)} · CAGR 5y ${pct(p.epsCagr5yr, 0)}\n` +
               `   vs 150-day avg ${pct(p.vsSma150Pct)} · ${p.pctFromAth == null ? '' : `${pct(p.pctFromAth)} from the high`}\n` +
-              `   ${p.reasons.join('; ')}\n` +
-              `   ${data.siteUrl}/ticker/${p.symbol}`,
-          )
+              `   ${reasons.length ? reasons.join('; ') : 'Cleared every entry gate.'}\n` +
+              `   ${data.siteUrl}/ticker/${p.symbol}`
+            )
+          })
           .join('\n\n'),
     ``,
     `Fundamental signals only — not investment advice.`,
@@ -270,4 +390,30 @@ export function renderDigest(data: DigestData): { subject: string; html: string;
     html: shell({ title: subject, preheader, bodyHtml: body, footerLinksHtml: footerLinks }),
     text,
   }
+}
+
+/** v1 unless the resolved template is 'v2' after trimming whitespace and
+ *  lowercasing (so 'V2', ' v2 ', etc. all count — this comparison is NOT a
+ *  strict `=== 'v2'` on the raw value). "Resolved" means: the explicit
+ *  `template` argument when the caller supplies one, otherwise
+ *  `DIGEST_TEMPLATE`. The env-var default is deliberate: a deploy that
+ *  forgets the flag must not change what subscribers receive — there are 13
+ *  real subscribers on v1 today, and reverting a bad v2 rollout has to be an
+ *  env-var change, not a code deploy.
+ *
+ *  `template` exists so the digest route can let a `?template=v2` query
+ *  param (itself gated on `force=1`, so it can never touch a real send — see
+ *  src/app/api/digest/route.ts) preview v2 without setting DIGEST_TEMPLATE
+ *  in production. Before this parameter existed, seeing v2 at all required
+ *  flipping the env var, which would mail it to all 13 subscribers on the
+ *  very next cron, before anyone reviewed it — see README's Rollout
+ *  section, which now describes the sequence this makes possible: preview
+ *  via the query param first, flip the flag only once it looks right.
+ *
+ *  Anything that doesn't normalise to exactly 'v2' (missing, empty,
+ *  mistyped, or anything else) fails safe to v1 rather than throwing or
+ *  falling through to the new template. */
+export function renderDigest(data: DigestData, template?: string): RenderedEmail {
+  const resolved = (template ?? process.env.DIGEST_TEMPLATE ?? 'v1').trim().toLowerCase()
+  return resolved === 'v2' ? renderDigestV2(data) : renderDigestV1(data)
 }

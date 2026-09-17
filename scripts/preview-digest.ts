@@ -33,6 +33,7 @@ function mkTech(positionPct: number, close: number, fib: Fib | null): Technicals
     positionPct,
     signals: null,
     windowBars: 126,
+    fullRange: null,
   }
 }
 
@@ -162,6 +163,7 @@ const { subject, html } = renderDigest({
   selection,
   asOfLabel: 'Monday, 14 September 2026',
   siteUrl: 'https://tripleqgroup.vercel.app',
+  indices: [],
 })
 
 mkdirSync('.preview', { recursive: true })
@@ -175,6 +177,7 @@ const empty = renderDigest({
   selection: { picks: [], considered: 61, belowCutoff: 2 },
   asOfLabel: 'Monday, 14 September 2026',
   siteUrl: 'https://tripleqgroup.vercel.app',
+  indices: [],
 })
 writeFileSync('.preview/digest-empty.html', empty.html)
 console.log('wrote .preview/digest-empty.html')

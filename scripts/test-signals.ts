@@ -41,12 +41,24 @@ import {
 } from '../src/lib/technicals'
 import type { Bar } from '../src/market-data/provider'
 import type { Fib, Technicals } from '../src/lib/technicals'
-import { epsCagr5yr, pctFromAth, vsSma150Pct } from '../src/lib/derive'
-import { renderConfirm } from '../src/lib/email/confirm'
-import { renderDigest } from '../src/lib/email/render'
 import {
+  epsCagr5yr,
+  epsSurprisePct,
+  fiftyTwoWeekRange,
+  pctFromAth,
+  priceChangePct,
+  vsSma150Pct,
+} from '../src/lib/derive'
+import { renderConfirm } from '../src/lib/email/confirm'
+import { renderDigest, type DigestData, type DigestSelection } from '../src/lib/email/render'
+import { renderDigestV2 } from '../src/lib/email/render-v2'
+import type { PrepPickRecord } from '../src/lib/digest'
+import { PALETTE } from '../src/lib/email/primitives'
+import {
+  deriveLevels,
   evaluate,
   selectPicks,
+  toDigestPickRecord,
   toPick,
   MAX_PICKS,
   MIN_MARKET_CAP,
@@ -54,6 +66,8 @@ import {
   WEIGHTS,
   type ScoreInput,
 } from '../src/lib/score'
+import { buildPayload, isGrounded, numericTokens } from '../src/lib/ai/prompt'
+import { resolveTemplateOverride } from '../src/app/api/digest/resolve-template'
 
 let failures = 0
 
@@ -494,6 +508,7 @@ async function main() {
       positionPct,
       signals: null,
       windowBars: 126,
+      fullRange: null,
     }
   }
 
@@ -522,6 +537,31 @@ async function main() {
   eq(perfectEval.passedGates, true, 'gates: the perfect input passes all five')
   eq(perfectEval.gates.length, 5, 'gates: five gates are reported')
   approx(perfectEval.score, 100, 0.05, 'score: the perfect input scores 100')
+
+  // ── deriveLevels: fibAnchor carries technicals.ts's own contract ───
+  // Fib.anchor ('swing' | 'window') tells the dashboard whether a ladder is
+  // a real swing retracement or a fallback drawn off the window's plain
+  // high/low (TechnicalChart.tsx labels the fallback "window extremes").
+  // deriveLevels must carry that same distinction into the email, not
+  // silently drop it and present every fallback ladder as a real swing.
+  eq(
+    deriveLevels(mkTech(0, 100, { high: 200, low: 0, direction: 'rally', anchor: 'swing', levels: [] }))
+      ?.fibAnchor,
+    'swing',
+    'deriveLevels: fibAnchor carries a real swing anchor through',
+  )
+  eq(
+    deriveLevels(mkTech(0, 100, { high: 200, low: 0, direction: 'rally', anchor: 'window', levels: [] }))
+      ?.fibAnchor,
+    'window',
+    'deriveLevels: fibAnchor carries a window (fallback) anchor through',
+  )
+  eq(
+    deriveLevels(mkTech(0, 100, null))?.fibAnchor,
+    null,
+    'deriveLevels: fibAnchor is null when there is no fib at all (no swing to anchor)',
+  )
+  eq(deriveLevels(null), null, 'deriveLevels: null technicals produces null levels end-to-end')
 
   // Each gate must reject on its own.
   eq(
@@ -641,6 +681,39 @@ async function main() {
   approx(ddAt(45), 0, 0.01, 'drawdown: -45% is a broken trend, zero credit')
   approx(ddAt(60), 0, 0.01, 'drawdown: beyond -45% stays zero')
 
+  // ── Score invariance across the widened input ────────────────────
+  console.log('\nTripleQ Score — invariance under added context')
+  const widened: ScoreInput = {
+    ...perfect,
+    forwardPe: 22.4,
+    peg5yr: 1.8,
+    netMarginTtm: 0.31,
+    grossMarginTtm: 0.62,
+    operatingMarginTtm: 0.4,
+    roiTtm: 0.27,
+    epsSurprisePct: 6.2,
+    change1dPct: -1.4,
+    change1wPct: 2.9,
+    change1mPct: 8.1,
+    fullRange: { high: 150, low: 60, pctFromHigh: -12, pctFromLow: 25 },
+  }
+  approx(
+    evaluate(widened).score,
+    evaluate(perfect).score,
+    1e-9,
+    'invariance: adding context fields moves the score by exactly zero',
+  )
+  eq(
+    JSON.stringify(evaluate(widened).factors.map((f) => f.points)),
+    JSON.stringify(evaluate(perfect).factors.map((f) => f.points)),
+    'invariance: every individual factor is unchanged',
+  )
+  eq(
+    JSON.stringify(evaluate(widened).gates.map((g) => g.passed)),
+    JSON.stringify(evaluate(perfect).gates.map((g) => g.passed)),
+    'invariance: every gate verdict is unchanged',
+  )
+
   console.log('\nTripleQ Score — selection')
   const mk = (symbol: string, over: Partial<ScoreInput>): ScoreInput => ({ ...perfect, symbol, ...over })
 
@@ -723,6 +796,7 @@ async function main() {
     selection: { picks: [rendererXssPick], considered: 1, belowCutoff: 0 },
     asOfLabel: 'Monday, 1 January 2026',
     siteUrl: 'https://example.com',
+    indices: [],
   }).html
   eq(
     rendererDigestXssHtml.includes('<script'),
@@ -735,6 +809,7 @@ async function main() {
     selection: { picks: [], considered: 12, belowCutoff: 2 },
     asOfLabel: 'Monday, 1 January 2026',
     siteUrl: 'https://example.com',
+    indices: [],
   })
   eq(
     rendererEmpty.subject,
@@ -770,6 +845,7 @@ async function main() {
     selection: { picks: [rendererNullPick], considered: 1, belowCutoff: 0 },
     asOfLabel: 'Monday, 1 January 2026',
     siteUrl: 'https://example.com',
+    indices: [],
   }).html
   eq(
     rendererNullHtml.includes('NaN%'),
@@ -785,10 +861,566 @@ async function main() {
     selection: capped,
     asOfLabel: 'Monday, 1 January 2026',
     siteUrl: 'https://example.com',
+    indices: [],
   }).html
   eq(rendererFullHtml.includes('<svg'), false, 'renderDigest: no inline SVG anywhere in the output')
   eq(rendererFullHtml.includes('display:flex'), false, 'renderDigest: no flexbox layout anywhere in the output')
   eq(rendererFullHtml.includes('display:grid'), false, 'renderDigest: no grid layout anywhere in the output')
+
+  // ── Email renderer — the prepared-row (PrepPickRecord) branch ────
+  // Task 7's digest route reads picks back from screener_digest_prep as
+  // `PrepPickRecord`s (a `toDigestPickRecord` projection + chartUrl), not
+  // full `ScoredPick`s, and `considered`/`belowCutoff` come from columns
+  // (migration 0031) that are null on a row written before it. Nothing
+  // above exercises that branch of card()/renderDigest — this is the
+  // committed guard the scratchpad verification from Task 7's first pass
+  // never became.
+  console.log('\nEmail renderers — prepared-row branch')
+
+  // A fresh prepared pick: exactly what a post-fix-round upsert writes —
+  // real reasons, real positionPct/retracement, and a real signal state.
+  // yoyPct: 10 with yoyState: 'flag' is the case the reviewer called out as
+  // mattering most: 10% is soft-positive (0–20% is 'flag', amber), so if the
+  // chip were coloured by sign instead of by state it would wrongly render
+  // green ('positive') — indistinguishable from a genuine >=20% 'pass'.
+  const rendererFreshFlagPick = toPick(
+    evaluate(mk('FRESH', { yoyPct: 10, yoyState: 'flag', ntmPct: 40, ntmState: 'pass' })),
+  )
+  const rendererPrepFresh: PrepPickRecord = {
+    ...toDigestPickRecord(rendererFreshFlagPick),
+    chartUrl: 'https://example.com/chart/FRESH.png',
+  }
+  eq(
+    rendererPrepFresh.reasons.length > 0 && rendererPrepFresh.yoyState === 'flag',
+    true,
+    'fixture sanity: the fresh prepared pick carries real reasons and yoyState',
+  )
+
+  // A legacy row: same yoyPct (10, soft-positive), but written before this
+  // fix round — the jsonb payload genuinely lacks reasons/positionPct/
+  // retracement/yoyState/ntmState at runtime even though the TS type now
+  // claims they're required. The cast mirrors readPrep's own
+  // `as PrepPickRecord[]` (no runtime validation), not a type escape hatch
+  // invented for this test — it is what a real old row looks like once cast.
+  const rendererPrepLegacy = {
+    symbol: 'LEGACY',
+    name: 'Legacy Co',
+    score: 55.5,
+    factors: [],
+    price: 42,
+    marketCap: 900_000_000_000,
+    trailingPe: 20,
+    yoyPct: 10,
+    ntmPct: -2,
+    epsCagr5yr: 1,
+    vsSma150Pct: 0.5,
+    pctFromAth: -5,
+    forwardPe: null,
+    peg5yr: null,
+    netMarginTtm: null,
+    grossMarginTtm: null,
+    operatingMarginTtm: null,
+    roiTtm: null,
+    epsSurprisePct: null,
+    change1dPct: null,
+    change1wPct: null,
+    change1mPct: null,
+    fullRange: null,
+    chartUrl: null,
+  } as unknown as PrepPickRecord
+
+  const rendererPrepSelection: DigestSelection = {
+    picks: [rendererPrepFresh, rendererPrepLegacy],
+    // Null exactly as a pre-0031 row (or a row `readPrep` mapped before the
+    // columns existed) reports it — the denominator-free header branch.
+    considered: null,
+    belowCutoff: null,
+  }
+
+  const rendererPrepMail = renderDigest({
+    recipient: { firstName: 'Test', unsubscribeToken: 'tok' },
+    selection: rendererPrepSelection,
+    asOfLabel: 'Monday, 1 January 2026',
+    siteUrl: 'https://example.com',
+    indices: [],
+    commentary: { marketRead: 'Markets steady.', perStock: { FRESH: 'Strong quarter.' } },
+  })
+
+  eq(
+    rendererPrepMail.html.includes('NaN'),
+    false,
+    'renderDigest (prep row): no "NaN" anywhere, full or legacy pick',
+  )
+  eq(
+    // The rendered sentence capitalizes only the very first character of the
+    // whole joined reason list (see the `card()` reason-building logic in
+    // render.ts), so compare from index 1 — everything after that is an
+    // unmodified substring of the persisted reasons[0].
+    rendererPrepMail.html.includes(rendererPrepFresh.reasons[0].slice(1)),
+    true,
+    'renderDigest (prep row): the fresh pick shows its real persisted reason, not the generic fallback',
+  )
+  eq(
+    rendererPrepMail.html.includes('Cleared every entry gate.'),
+    true,
+    'renderDigest (prep row): the legacy pick (no persisted reasons) falls back to the generic reason',
+  )
+  eq(
+    rendererPrepMail.html.includes(PALETTE.warningInk),
+    true,
+    "renderDigest (prep row): a fresh 'flag' (soft-positive) YoY chip renders amber, coloured by SignalState — not green by sign",
+  )
+  eq(
+    rendererPrepMail.html.includes('of null'),
+    false,
+    'renderDigest (prep row): a null considered never prints a fabricated denominator',
+  )
+  eq(
+    rendererPrepMail.html.includes(
+      `2 setups cleared the entry gate and scored ${MIN_SCORE} or better today. Ranked best first, ${MAX_PICKS} maximum.`,
+    ),
+    true,
+    'renderDigest (prep row): a null considered degrades the header to a denominator-free sentence',
+  )
+
+  // A prepared row with zero picks (a legitimate "nothing cleared" day) and
+  // no commentary must still render the empty state without a "No name
+  // both..." grammar break or an "Of null names" fabricated count.
+  const rendererPrepEmptyMail = renderDigest({
+    recipient: { firstName: 'Test', unsubscribeToken: 'tok' },
+    selection: { picks: [], considered: null, belowCutoff: null },
+    asOfLabel: 'Monday, 1 January 2026',
+    siteUrl: 'https://example.com',
+    indices: [],
+    commentary: null,
+  })
+  eq(
+    rendererPrepEmptyMail.html.includes('Of null'),
+    false,
+    'renderDigest (prep row, empty): a null considered never prints "Of null" in the empty state',
+  )
+  eq(
+    rendererPrepEmptyMail.html.includes('Nothing passed every entry gate'),
+    true,
+    'renderDigest (prep row, empty): the null-considered empty state reads grammatically',
+  )
+
+  // ── Email renderers — v2 template ────────────────────────────────
+  // Task 9's own coverage: renderDigestV2 called directly (not through the
+  // renderDigest() dispatcher), plus the dispatcher's DIGEST_TEMPLATE flag
+  // itself further down. `indices: []` is required on every call now that
+  // DigestData carries it (see render.ts) — that requirement is itself part
+  // of what this branch is verifying: a `DigestData` literal missing the key
+  // entirely no longer compiles.
+  console.log('\nEmail renderers — v2 template')
+
+  const rendererV2XssPick = toPick(evaluate(mk('XSS2', { name: rendererXssPayload })))
+  const rendererV2XssHtml = renderDigestV2({
+    recipient: { firstName: 'Test', unsubscribeToken: 'tok' },
+    selection: { picks: [rendererV2XssPick], considered: 1, belowCutoff: 0 },
+    asOfLabel: 'Monday, 1 January 2026',
+    siteUrl: 'https://example.com',
+    indices: [],
+  }).html
+  eq(
+    rendererV2XssHtml.includes('<script'),
+    false,
+    'renderDigestV2: an XSS payload in a pick name is escaped, not rendered as a tag',
+  )
+
+  // A broken <img> in a financial email is worse than no image, so a pick
+  // with no chartUrl must never emit the chart row. The card's LOGO <img> is
+  // unconditional (every card gets one, chartUrl or not), so the assertion
+  // targets the chart row's own alt text specifically — "no <img at all"
+  // would be true of no real digest and would pass by accident.
+  eq(
+    rendererV2XssHtml.includes('126-day price chart'),
+    false,
+    'renderDigestV2: a pick with no chartUrl emits no chart <img> (the always-present logo <img> is a separate element)',
+  )
+  // Control case proving the assertion above can actually fail: the same
+  // shape of pick WITH a chartUrl does emit the chart image.
+  const rendererV2ChartPick = toPick(
+    evaluate(mk('V2CHART', { chartUrl: 'https://example.com/chart/V2CHART.png' })),
+  )
+  const rendererV2ChartHtml = renderDigestV2({
+    recipient: { firstName: 'Test', unsubscribeToken: 'tok' },
+    selection: { picks: [rendererV2ChartPick], considered: 1, belowCutoff: 0 },
+    asOfLabel: 'Monday, 1 January 2026',
+    siteUrl: 'https://example.com',
+    indices: [],
+  }).html
+  eq(
+    rendererV2ChartHtml.includes('126-day price chart'),
+    true,
+    'renderDigestV2: a pick WITH a chartUrl does emit the chart <img> (control case for the assertion above)',
+  )
+
+  // Same email-client constraints as v1: no inline SVG (Gmail strips it), no
+  // flex/grid (neither Gmail nor Word-rendered Outlook can be trusted with
+  // it). Uses `capped` (MAX_PICKS worth of picks, defined above) plus real
+  // commentary so every block in cardV2 — metrics grid, technical levels,
+  // per-stock AI panel — actually renders and gets checked, not just an
+  // empty shell.
+  const rendererV2FullHtml = renderDigestV2({
+    recipient: { firstName: 'Test', unsubscribeToken: 'tok' },
+    selection: capped,
+    asOfLabel: 'Monday, 1 January 2026',
+    siteUrl: 'https://example.com',
+    indices: [],
+    commentary: { marketRead: 'Broad markets are firm into the open.', perStock: { T00: 'Strong quarter.' } },
+  }).html
+  eq(rendererV2FullHtml.includes('<svg'), false, 'renderDigestV2: no inline SVG anywhere in the output')
+  eq(
+    rendererV2FullHtml.includes('display:flex'),
+    false,
+    'renderDigestV2: no flexbox layout anywhere in the output',
+  )
+  eq(
+    rendererV2FullHtml.includes('display:grid'),
+    false,
+    'renderDigestV2: no grid layout anywhere in the output',
+  )
+
+  // `considered: null` must never fabricate a denominator. Asserted two ways:
+  // the literal "of null" never appears, AND (able to actually fail, unlike
+  // a "did not throw" check) the header degrades to the exact denominator-
+  // free sentence — if the null branch were ever skipped, this exact string
+  // would not appear because the numbered branch would render instead.
+  const rendererV2ConsideredNullHtml = renderDigestV2({
+    recipient: { firstName: 'Test', unsubscribeToken: 'tok' },
+    selection: { picks: [rendererV2XssPick], considered: null, belowCutoff: null },
+    asOfLabel: 'Monday, 1 January 2026',
+    siteUrl: 'https://example.com',
+    indices: [],
+  }).html
+  eq(
+    rendererV2ConsideredNullHtml.includes('of null'),
+    false,
+    'renderDigestV2: a null considered never prints a fabricated "of null" denominator',
+  )
+  eq(
+    rendererV2ConsideredNullHtml.includes(
+      `1 setup cleared the entry gate and scored ${MIN_SCORE} or better today. Ranked best first, ${MAX_PICKS} maximum.`,
+    ),
+    true,
+    'renderDigestV2: a null considered degrades the header to the denominator-free sentence',
+  )
+
+  // ── Email renderers — the DIGEST_TEMPLATE flag ───────────────────
+  // The default matters more than anything else in this task: 13 real
+  // subscribers receive v1 today, and DIGEST_TEMPLATE unset must keep it
+  // that way. Structural marker, not incidental text: "📐 Technical levels"
+  // is the technical-levels panel's own heading, unique to v2's markup (see
+  // primitives-v2.ts) and rendered unconditionally whenever a card renders —
+  // its presence/absence is a direct read on which template actually ran.
+  console.log('\nEmail renderers — the DIGEST_TEMPLATE flag')
+
+  const rendererFlagPick = toPick(evaluate(mk('FLAG', {})))
+  const rendererFlagData: DigestData = {
+    recipient: { firstName: 'Test', unsubscribeToken: 'tok' },
+    selection: { picks: [rendererFlagPick], considered: 1, belowCutoff: 0 },
+    asOfLabel: 'Monday, 1 January 2026',
+    siteUrl: 'https://example.com',
+    indices: [],
+  }
+  const V2_MARKER = '📐 Technical levels'
+  const originalDigestTemplate = process.env.DIGEST_TEMPLATE
+
+  delete process.env.DIGEST_TEMPLATE
+  eq(
+    renderDigest(rendererFlagData).html.includes(V2_MARKER),
+    false,
+    'renderDigest: DIGEST_TEMPLATE unset dispatches to v1 — the v2-only technical-levels panel is absent',
+  )
+
+  process.env.DIGEST_TEMPLATE = 'v2'
+  eq(
+    renderDigest(rendererFlagData).html.includes(V2_MARKER),
+    true,
+    "renderDigest: DIGEST_TEMPLATE='v2' dispatches to v2 — the technical-levels panel is present",
+  )
+
+  // Ambiguity resolved in the brief: anything other than exactly 'v2' fails
+  // safe to v1 rather than throwing or falling through to the new template.
+  process.env.DIGEST_TEMPLATE = 'v3'
+  eq(
+    renderDigest(rendererFlagData).html.includes(V2_MARKER),
+    false,
+    "renderDigest: an unrecognised DIGEST_TEMPLATE ('v3') fails safe to v1, not v2",
+  )
+  process.env.DIGEST_TEMPLATE = ''
+  eq(
+    renderDigest(rendererFlagData).html.includes(V2_MARKER),
+    false,
+    'renderDigest: DIGEST_TEMPLATE set to the empty string falls back to v1, same as unset',
+  )
+
+  // Whitespace and case are normalised before comparison.
+  process.env.DIGEST_TEMPLATE = ' V2 '
+  eq(
+    renderDigest(rendererFlagData).html.includes(V2_MARKER),
+    true,
+    "renderDigest: DIGEST_TEMPLATE=' V2 ' still matches (trimmed + lowercased) and dispatches to v2",
+  )
+
+  // The explicit `template` argument (Task 11/I5): lets the digest route
+  // preview v2 for one request without touching DIGEST_TEMPLATE. With the
+  // env var unset (v1 default), an explicit template='v2' argument still
+  // dispatches to v2 — and an explicit template='v1' argument overrides an
+  // env var of 'v2' back down to v1, proving the argument really takes
+  // precedence over the env var in both directions, not just when they agree.
+  delete process.env.DIGEST_TEMPLATE
+  eq(
+    renderDigest(rendererFlagData, 'v2').html.includes(V2_MARKER),
+    true,
+    "renderDigest: an explicit template='v2' argument dispatches to v2 even with DIGEST_TEMPLATE unset",
+  )
+  process.env.DIGEST_TEMPLATE = 'v2'
+  eq(
+    renderDigest(rendererFlagData, 'v1').html.includes(V2_MARKER),
+    false,
+    "renderDigest: an explicit template='v1' argument overrides DIGEST_TEMPLATE='v2' back to v1",
+  )
+  eq(
+    renderDigest(rendererFlagData, undefined).html.includes(V2_MARKER),
+    true,
+    'renderDigest: an undefined template argument falls back to DIGEST_TEMPLATE, same as omitting it',
+  )
+
+  if (originalDigestTemplate === undefined) delete process.env.DIGEST_TEMPLATE
+  else process.env.DIGEST_TEMPLATE = originalDigestTemplate
+
+  // resolveTemplateOverride (src/app/api/digest/route.ts's `template` query
+  // param, via the sibling module it's split into): honoured ONLY when
+  // `force` is true. Without this gate, `?template=v2` alone would redirect
+  // a REAL send to the unreviewed template — see the module's own doc
+  // comment for why `force` (which already redirects delivery to
+  // DIGEST_TEST_EMAIL) is what makes a safe preview possible.
+  eq(
+    resolveTemplateOverride(false, 'v2'),
+    undefined,
+    'resolveTemplateOverride: template=v2 without force=1 is ignored',
+  )
+  eq(
+    resolveTemplateOverride(true, 'v2'),
+    'v2',
+    'resolveTemplateOverride: template=v2 WITH force=1 is honoured',
+  )
+  eq(
+    resolveTemplateOverride(true, null),
+    undefined,
+    'resolveTemplateOverride: force=1 with no template param stays undefined (default dispatch)',
+  )
+  eq(
+    resolveTemplateOverride(false, null),
+    undefined,
+    'resolveTemplateOverride: neither force nor template set is undefined',
+  )
+
+  // ── AI commentary — grounding guard ───────────────────────────────
+  console.log('\nAI commentary — grounding guard')
+  const perfectPickForPrompt = toPick(evaluate(perfect))
+  const gPayload = buildPayload(
+    [{ ...perfectPickForPrompt }],
+    [{ key: 'sp500', name: 'S&P 500', ytdPct: 12.4, trailingPe: 24.1, forwardPe: 21.0 }],
+  )
+  eq(
+    isGrounded('AAA sits at 100.0 with the S&P 500 up 12.4% this year.', gPayload),
+    true,
+    'grounding: prose using only supplied figures passes',
+  )
+  eq(
+    isGrounded('AAA rallied to $412.50 on heavy volume.', gPayload),
+    false,
+    'grounding: an invented figure is rejected',
+  )
+  eq(
+    isGrounded('Momentum is constructive and breadth is improving.', gPayload),
+    true,
+    'grounding: prose with no figures passes',
+  )
+  // Regex-only extraction reads "12.4" as one token, "100" as one, "109" as
+  // one — three numeric literals, not four; the brief's worked example
+  // assumed each digit run split further. Documented in the Task 5 report.
+  eq(
+    numericTokens('up 12.4% from $100 to 109').length,
+    3,
+    'numericTokens: extracts every numeric token',
+  )
+
+  // ── Structural phrases: period names/Fib ratios admitted IN CONTEXT ──
+  // Before this fix, the natural way to describe this system's own output —
+  // "holding above its 150-day average" — tripped the guard: no payload
+  // NUMBER happens to equal 150, so the whole commentary was dropped over
+  // phrasing, not a fabrication. The FIRST fix admitted the bare numbers
+  // unconditionally, which over-corrected (see the fabricated-claims block
+  // below); this one strips the PHRASE instead, same mechanism as
+  // identifyingStrings/stripIdentifyingStrings above.
+  eq(
+    isGrounded('AAA is holding above its 150-day average.', gPayload),
+    true,
+    'grounding: "150-day" in structural context passes',
+  )
+  eq(
+    isGrounded('AAA sits near the top of its 52-week range.', gPayload),
+    true,
+    'grounding: "52-week" in structural context passes',
+  )
+
+  // Fabricated-claims regression: bare structural NUMBERS, with no
+  // structural word attached, must still be rejected like any other
+  // fabricated figure — this is exactly what the phrase-strip (vs.
+  // bare-value-admit) fix buys back. Payload deliberately avoids any
+  // coincidental legitimate match for 1/5/21/50/52/126/150 — price,
+  // margins and momentum are chosen to sit well clear of all seven, and the
+  // index roster reproduces the names whose embedded digits leaked before
+  // Task 5's fix (Russell 2000, Nasdaq-100, S&P 500, TA-35), to also
+  // reconfirm THAT leak is still closed.
+  const structuralPick = toPick(
+    evaluate({
+      ...perfect,
+      price: 344.1,
+      trailingPe: 28.7,
+      yoyPct: 33.3,
+      ntmPct: 19.4,
+      epsCagr5yr: 22.1,
+      allTimeHigh: 344.1 / (1 - 0.184), // pctFromAth ≈ -18.4%, clear of all seven
+      // The bar close fed to mkTech (360) is deliberately NOT the same as
+      // `price` above (344.1) — it only drives retracement/positionPct/the
+      // composite score, none of which need to match price for a synthetic
+      // fixture, and 360 was picked (by brute-force search over the fib
+      // window) specifically so neither retracement's own value nor the
+      // resulting score round to 1/5/21/50/52/126/150 at any of
+      // groundedNumbers' supported precisions. 344.1 itself rounded to 1
+      // (retracement ≈ 1.0) and 50 (score ≈ 50.4/50.0) at nearby values —
+      // exactly the class of coincidental collision this payload exists to
+      // avoid.
+      technicals: mkTech(42.7, 360, { high: 400, low: 300, direction: 'rally', anchor: 'swing', levels: [] }),
+    }),
+  )
+  const structuralPayload = buildPayload(
+    [structuralPick],
+    [
+      { key: 'rut', name: 'Russell 2000', ytdPct: 8.1, trailingPe: 24.6, forwardPe: 19.4 },
+      { key: 'ndx', name: 'Nasdaq-100', ytdPct: 22.3, trailingPe: 31.7, forwardPe: 27.9 },
+      { key: 'sp500', name: 'S&P 500', ytdPct: 12.4, trailingPe: 24.1, forwardPe: 20.3 },
+      { key: 'ta35', name: 'TA-35', ytdPct: 9.6, trailingPe: 14.2, forwardPe: 12.8 },
+    ],
+  )
+  eq(
+    isGrounded('AAA has a breakout target near $150.', structuralPayload),
+    false,
+    'grounding: a bare $150 (no structural word attached) is rejected',
+  )
+  eq(
+    isGrounded('AAA broke $52 support.', structuralPayload),
+    false,
+    'grounding: a bare $52 (no "week" attached) is rejected',
+  )
+  eq(
+    isGrounded('AAA gained 5% on the session.', structuralPayload),
+    false,
+    'grounding: a bare 5% ("session" not hyphenated onto the number) is rejected',
+  )
+  eq(
+    isGrounded("AAA's operating margin reached 21%.", structuralPayload),
+    false,
+    'grounding: a bare 21% (no "day" attached) is rejected',
+  )
+  eq(
+    isGrounded('AAA is 50% off its high.', structuralPayload),
+    false,
+    'grounding: a bare 50% (no Fib word attached) is rejected',
+  )
+  eq(
+    isGrounded('AAA could fall to $126.', structuralPayload),
+    false,
+    'grounding: a bare $126 (no "bar" attached) is rejected',
+  )
+  eq(
+    isGrounded('AAA added $1 today.', structuralPayload),
+    false,
+    'grounding: a bare $1 (no "day" attached) is rejected',
+  )
+  // Same payload, still in structural context: these must keep passing —
+  // the tightening must not have thrown out the phrasing this whole feature
+  // exists to permit.
+  eq(
+    isGrounded('AAA is holding above its 150-day average.', structuralPayload),
+    true,
+    'grounding: "150-day" still passes against the fabricated-claims payload',
+  )
+  eq(
+    isGrounded('AAA sits near the top of its 52-week range.', structuralPayload),
+    true,
+    'grounding: "52-week" still passes against the fabricated-claims payload',
+  )
+  eq(
+    isGrounded('AAA is pulling back toward the 61.8% retracement.', structuralPayload),
+    true,
+    'grounding: a Fib ratio WITH its word attached ("61.8% retracement") passes',
+  )
+
+  // Index-name digit leak (Task 5's fix round): still closed.
+  eq(
+    isGrounded('AAA is trading at $100 resistance.', structuralPayload),
+    false,
+    'grounding (index-leak regression): a fabricated $100 is still rejected',
+  )
+  eq(
+    isGrounded('AAA rallied to $500 today.', structuralPayload),
+    false,
+    'grounding (index-leak regression): the digits inside "S&P 500" do not leak into a fabricated $500',
+  )
+  eq(
+    isGrounded('AAA moved 2000 basis points intraday.', structuralPayload),
+    false,
+    'grounding (index-leak regression): the digits inside "Russell 2000" do not leak into a fabricated 2000',
+  )
+  eq(
+    isGrounded('AAA is down 35% from highs.', structuralPayload),
+    false,
+    'grounding (index-leak regression): the digits inside "TA-35" do not leak into a fabricated 35%',
+  )
+  eq(
+    isGrounded('AAA rallied to $317.25 on heavy volume.', structuralPayload),
+    false,
+    'grounding (index-leak regression): an invented precise figure is still rejected',
+  )
+
+  // ── Derivations: momentum, range, surprise ───────────────────────
+  console.log('\nDerivations — momentum and range')
+  // closes 100..109 over 10 bars
+  const mBars = Array.from({ length: 10 }, (_, i) => ({ t: i, o: 0, h: 0, l: 0, c: 100 + i }))
+  approx(priceChangePct(mBars, 1), (109 / 108 - 1) * 100, 0.01, 'priceChangePct(1): 109 vs 108 ≈ +0.93%')
+  approx(priceChangePct(mBars, 5), (109 / 104 - 1) * 100, 1e-9, 'priceChangePct(5): 109 vs 104')
+  eq(priceChangePct(mBars, 20), null, 'priceChangePct: lookback beyond history returns null')
+  eq(priceChangePct([], 1), null, 'priceChangePct: empty series returns null')
+
+  const rBars = [
+    { t: 0, o: 0, h: 120, l: 80, c: 100 },
+    { t: 1, o: 0, h: 150, l: 95, c: 140 },
+    { t: 2, o: 0, h: 130, l: 60, c: 75 },
+  ]
+  const r52 = fiftyTwoWeekRange(rBars)
+  approx(r52?.high ?? null, 150, 1e-9, 'fiftyTwoWeekRange: high is the max of highs')
+  approx(r52?.low ?? null, 60, 1e-9, 'fiftyTwoWeekRange: low is the min of lows')
+  approx(r52?.pctFromHigh ?? null, (75 / 150 - 1) * 100, 1e-9, 'fiftyTwoWeekRange: last close vs high')
+  approx(r52?.pctFromLow ?? null, (75 / 60 - 1) * 100, 1e-9, 'fiftyTwoWeekRange: last close vs low')
+  eq(fiftyTwoWeekRange([]), null, 'fiftyTwoWeekRange: empty series returns null')
+
+  approx(epsSurprisePct(1.2, 1.0), 20, 1e-9, 'epsSurprisePct: 1.20 actual vs 1.00 estimate = +20%')
+  approx(epsSurprisePct(0.8, 1.0), -20, 1e-9, 'epsSurprisePct: a miss is negative')
+  eq(epsSurprisePct(1.2, 0), null, 'epsSurprisePct: zero estimate returns null, not Infinity')
+  eq(epsSurprisePct(null, 1.0), null, 'epsSurprisePct: missing actual returns null')
+  approx(epsSurprisePct(-0.8, -1.0), 20, 1e-9, 'epsSurprisePct: a loss narrower than consensus is a BEAT (+20%)')
+  approx(epsSurprisePct(-1.2, -1.0), -20, 1e-9, 'epsSurprisePct: a loss wider than consensus is a MISS (-20%)')
+
+  // analyze() surfaces the full-series range so nothing re-walks the bars
+  const rangeTech = analyze(rBars)
+  approx(rangeTech.fullRange?.high ?? null, 150, 1e-9, 'analyze: fullRange.high')
+  eq(analyze([]).fullRange, null, 'analyze([]): fullRange is null')
 
   // ── Result ───────────────────────────────────────────────────────
   console.log('')

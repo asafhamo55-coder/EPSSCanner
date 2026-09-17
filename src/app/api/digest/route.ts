@@ -1,10 +1,12 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { ingestAllActive } from '@/lib/ingest'
 import { publish } from '@/lib/publish'
-import { buildSelection } from '@/lib/digest'
+import { buildSelection, readPrep } from '@/lib/digest'
 import type { Selection } from '@/lib/score'
 import { toDigestPickRecord } from '@/lib/score'
-import { renderDigest } from '@/lib/email/render'
+import { renderDigest, type DigestData, type DigestSelection } from '@/lib/email/render'
+import type { Commentary } from '@/lib/ai/commentary'
+import { getIndices, type IndexCardData } from '@/market-data/indices'
 import { sendEmails, type EmailMessage } from '@/lib/email/send'
 import {
   claimDigestDay,
@@ -15,6 +17,8 @@ import {
 } from '@/lib/subscribers'
 import { siteUrl } from '@/lib/site'
 import { db } from '@/lib/db'
+import { easternDate } from '@/lib/eastern'
+import { resolveTemplateOverride } from './resolve-template'
 
 // The TripleQ Daily Maily.
 //
@@ -46,19 +50,6 @@ function easternHour(now: Date): number {
   return Number(
     new Intl.DateTimeFormat('en-US', { timeZone: TZ, hour: 'numeric', hour12: false }).format(now),
   )
-}
-
-/** Today's Eastern calendar date as 'YYYY-MM-DD' — the idempotency key. Must be
- *  Eastern, not UTC: at 06:00 ET the UTC date is the same day, but deriving it
- *  from UTC would drift the moment the schedule or the timezone rules change. */
-function easternDate(now: Date): string {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: TZ,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(now)
-  return parts
 }
 
 function easternLabel(now: Date): string {
@@ -120,6 +111,16 @@ export async function GET(req: NextRequest) {
   }
 
   const force = req.nextUrl.searchParams.get('force') === '1'
+  // `template=v2` previews the v2 renderer for THIS request only, without
+  // touching DIGEST_TEMPLATE — see renderDigest's doc comment in
+  // src/lib/email/render.ts for why that parameter exists at all. Honoured
+  // ONLY when `force` is also set: without that gate, `?template=v2` alone
+  // would let anyone redirect a REAL send (to the real subscriber list) to
+  // the unreviewed template, which is exactly the accidental-exposure risk
+  // this whole mechanism exists to avoid. `force` already redirects delivery
+  // to DIGEST_TEST_EMAIL, so pairing the two is what makes "preview v2
+  // safely" possible — see resolveTemplateOverride's own tests.
+  const templateOverride = resolveTemplateOverride(force, req.nextUrl.searchParams.get('template'))
   // `now=1` waives ONLY the clock guard: the real subscriber list, the day
   // claim and the recorded send all behave exactly as on a cron run. It exists
   // because a missed or failed cron would otherwise have no recovery path —
@@ -146,9 +147,12 @@ export async function GET(req: NextRequest) {
   // sends. A read-only mode is the fix; remembering to append `?force=1` is
   // not. Placed FIRST so no guard, claim or ingest can run ahead of it.
   if (req.nextUrl.searchParams.get('status') === '1') {
-    const [selection, confirmed] = await Promise.all([
+    const [selection, confirmed, prep] = await Promise.all([
       buildSelection().catch((e) => ({ error: (e as Error).message })),
       listConfirmed().then((s) => s.length).catch(() => null),
+      // Read-only, so it can answer "is tomorrow's email going to have
+      // charts?" without sending anything. Never throws (see readPrep).
+      readPrep(today),
     ])
     const already = await digestSentOn(today).catch(() => null)
     return NextResponse.json({
@@ -162,6 +166,17 @@ export async function GET(req: NextRequest) {
       picks: 'error' in (selection as object) ? null : (selection as Selection).picks.length,
       considered: 'error' in (selection as object) ? null : (selection as Selection).considered,
       wouldSendTo: confirmed,
+      // What a real send would actually use: the prepared row if one exists
+      // for today, or the inline `selection` above as a fallback. See the
+      // "prep" vs "inline" path in the send branch below.
+      prep: prep
+        ? {
+            present: true,
+            picks: prep.picks.length,
+            chartsRendered: prep.chartCount,
+            commentaryPresent: prep.aiOk && prep.marketRead != null,
+          }
+        : { present: false },
     })
   }
 
@@ -204,18 +219,106 @@ export async function GET(req: NextRequest) {
     let sendStarted = false
     try {
       // 4. Build.
-      const selection = await buildSelection()
+      //
+      // Normal path: the 09:30 UTC ingest cron already scored the watchlist,
+      // rendered a chart per pick and made the one Claude call, and left the
+      // result in screener_digest_prep — read it instead of repeating any of
+      // that work here. `readPrep` scopes its query to `today`, so a row
+      // only comes back if it was prepared for THIS Eastern date; a row from
+      // an earlier date (preparation never ran today, or the ingest cron
+      // failed) simply isn't returned.
+      //
+      // Fallback path: no row for today — score inline exactly as v1 did.
+      // No charts, no commentary, but the digest still goes out. This is the
+      // expected state on the first deploy, after a failed ingest, or any
+      // day the screener_digest_prep migration hasn't been applied yet — NOT
+      // an error.
+      //
+      // `readPrep`'s picks are `toDigestPickRecord` projections with
+      // `chartUrl` attached (see src/lib/digest.ts) — as of Task 7's fix
+      // round 1 that projection carries `reasons`/`positionPct`/
+      // `retracement`/`yoyState`/`ntmState` too, so the prepared path
+      // renders the real reason text and the real signal-state chip colour,
+      // not a degraded fallback. What it still does NOT carry: `gates`,
+      // `passedGates`, and `input` itself beyond the two states pulled out
+      // above (in particular `input.technicals` — exactly the ~27KB-per-pick
+      // payload this projection exists to keep out of a jsonb column).
+      // `considered`/`belowCutoff` come from the prep row's own columns
+      // (migration 0031) and are null for a row written before that
+      // migration — `renderDigest`'s `DigestSelection` type and `card()`
+      // both know how to degrade for a null denominator — see
+      // src/lib/email/render.ts.
+      const prep = await readPrep(today).catch((e) => {
+        console.error(`[digest] prep read threw: ${(e as Error).message}`)
+        return null
+      })
+      const usingPrep = prep != null
+      let selection: DigestSelection
+      let pickRecords: unknown
+      let commentary: Commentary | null = null
+      if (usingPrep && prep) {
+        selection = { picks: prep.picks, considered: prep.considered, belowCutoff: prep.belowCutoff }
+        pickRecords = prep.picks
+        commentary = prep.marketRead != null ? { marketRead: prep.marketRead, perStock: prep.perStock } : null
+        console.log(
+          `[digest] ${today}: sending from the prepared row — ${prep.picks.length} pick(s), ` +
+            `${prep.chartCount} chart(s), commentary ${commentary ? 'present' : 'absent'}`,
+        )
+      } else {
+        const built = await buildSelection()
+        selection = built
+        pickRecords = built.picks.map(toDigestPickRecord)
+        console.log(
+          `[digest] ${today}: no prepared row — scoring inline (no charts, no commentary)`,
+        )
+      }
       // publish() invalidates the 'yahoo-live' cache tag (SMA/ATH/PEG/technicals)
-      // that buildSelection() just read. Calling it BEFORE the build (as this
-      // route used to) would make this same request pay to repopulate the
-      // cache it had just dropped. Those live fields move slowly relative to
-      // the fundamentals ingestAllActive() refreshes, so building from the
-      // still-warm cache is fine — invalidating afterwards just makes sure the
-      // NEXT reader (the /daily preview, the dashboard) sees fresh data
-      // without this request footing that bill.
+      // that buildSelection() reads on the fallback path above. Calling it
+      // BEFORE the build (as this route used to) would make this same
+      // request pay to repopulate the cache it had just dropped. Those live
+      // fields move slowly relative to the fundamentals ingestAllActive()
+      // refreshes, so building from the still-warm cache is fine —
+      // invalidating afterwards just makes sure the NEXT reader (the /daily
+      // preview, the dashboard) sees fresh data without this request footing
+      // that bill. On the prep path buildSelection() never runs, so this is
+      // simply about keeping other readers fresh.
       if (didIngest) publish()
       const origin = siteUrl()
       const asOfLabel = easternLabel(now)
+
+      // Header index strip data. Same source preparation used to build the AI
+      // payload (src/lib/digest.ts) — but COLD by construction here, not
+      // warm: `getIndices` is cached behind `unstable_cache(['key-indices-v1'],
+      // { revalidate: 900 })`, a 15-minute TTL, and this route runs 90+
+      // minutes after preparation populated it. Every read at this point is
+      // therefore a guaranteed miss — a live fan-out of up to 7 Yahoo
+      // requests, none of which carries its own timeout — and it runs AFTER
+      // claimDigestDay and BEFORE sendStarted = true. A hang here past
+      // `maxDuration` is a platform kill, not a rejected promise a `.catch()`
+      // can see: the process dies mid-flight, the `catch` below never runs,
+      // `releaseDigestDay` never runs, and the day becomes permanently
+      // unsendable.
+      //
+      // Raced against a 5s timer we control instead, exactly the pattern
+      // prepareDigest already uses for its own AI stage (src/lib/digest.ts):
+      // losing the race resolves to an empty array — renderDigestV2's index
+      // strip just renders nothing, the same degraded path a fetch failure
+      // takes — losing the function loses the whole day.
+      let indicesTimer: ReturnType<typeof setTimeout> | undefined
+      const indices = await Promise.race([
+        getIndices().catch((e) => {
+          console.error(`[digest] indices failed: ${(e as Error).message}`)
+          return [] as IndexCardData[]
+        }),
+        new Promise<IndexCardData[]>((resolve) => {
+          indicesTimer = setTimeout(() => {
+            console.warn('[digest] indices timed out after 5000ms — sending with an empty index strip')
+            resolve([])
+          }, 5000)
+        }),
+      ]).finally(() => {
+        if (indicesTimer) clearTimeout(indicesTimer)
+      })
 
       // 5. Send.
       const recipients = force
@@ -232,12 +335,20 @@ export async function GET(req: NextRequest) {
           }))
 
       const messages: EmailMessage[] = recipients.map((r) => {
-        const mail = renderDigest({
+        // `indices` is a required field on `DigestData` itself (Task 9
+        // hoisted it there from a render-v2.ts-local type — see render.ts's
+        // DigestData doc comment), so this literal has to supply it whether
+        // `renderDigest` ends up dispatching to v1 (which ignores it) or v2
+        // (which reads it for the header index strip).
+        const mailData: DigestData = {
           recipient: { firstName: r.firstName, unsubscribeToken: r.unsubscribeToken },
           selection,
           asOfLabel,
           siteUrl: origin,
-        })
+          commentary,
+          indices,
+        }
+        const mail = renderDigest(mailData, templateOverride)
         const unsub = `${origin}/api/subscribe/unsubscribe?token=${encodeURIComponent(r.unsubscribeToken)}`
         return {
           to: r.email,
@@ -268,13 +379,12 @@ export async function GET(req: NextRequest) {
       // 6. Record. Persist the compact DTO, not the full ScoredPick — the
       // latter carries input.technicals (126 OHLC bars + four 126-point
       // series per pick), which does not belong in this jsonb audit column.
+      // On the prep path `pickRecords` is already this same DTO shape (plus
+      // chartUrl) straight from screener_digest_prep, so there's nothing to
+      // re-derive; on the fallback path it's mapped from the ScoredPicks
+      // buildSelection() just produced.
       if (claimId) {
-        await recordDigestSend(
-          claimId,
-          report.sent,
-          selection.picks.length,
-          selection.picks.map(toDigestPickRecord),
-        )
+        await recordDigestSend(claimId, report.sent, selection.picks.length, pickRecords)
       }
 
       return NextResponse.json({
@@ -283,8 +393,11 @@ export async function GET(req: NextRequest) {
         sendNow,
         sentOn: today,
         refreshed,
+        source: usingPrep ? 'prep' : 'inline',
         considered: selection.considered,
         picks: selection.picks.length,
+        chartsFromPrep: usingPrep && prep ? prep.chartCount : 0,
+        commentary: commentary != null,
         recipients: recipients.length,
         sent: report.sent,
         failed: report.failed,
