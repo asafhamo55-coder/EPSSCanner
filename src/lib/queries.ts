@@ -47,7 +47,7 @@ const cachedAth = unstable_cache(
  *  as SMA, so it shares that TTL rather than getting its own. */
 const cachedTechnicals = unstable_cache(
   (symbol: string) => new YahooProvider().getDailyBars(symbol, FETCH_BARS).then(analyze),
-  ['yahoo-technicals-v1'],
+  ['yahoo-technicals-v2'], // v2: Technicals gained `fullRange`; v1 entries lack the key
   { revalidate: SMA_TTL_S, tags: ['yahoo-live'] },
 )
 

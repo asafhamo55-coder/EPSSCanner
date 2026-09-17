@@ -856,6 +856,8 @@ async function main() {
   approx(epsSurprisePct(0.8, 1.0), -20, 1e-9, 'epsSurprisePct: a miss is negative')
   eq(epsSurprisePct(1.2, 0), null, 'epsSurprisePct: zero estimate returns null, not Infinity')
   eq(epsSurprisePct(null, 1.0), null, 'epsSurprisePct: missing actual returns null')
+  approx(epsSurprisePct(-0.8, -1.0), 20, 1e-9, 'epsSurprisePct: a loss narrower than consensus is a BEAT (+20%)')
+  approx(epsSurprisePct(-1.2, -1.0), -20, 1e-9, 'epsSurprisePct: a loss wider than consensus is a MISS (-20%)')
 
   // analyze() surfaces the full-series range so nothing re-walks the bars
   const rangeTech = analyze(rBars)
