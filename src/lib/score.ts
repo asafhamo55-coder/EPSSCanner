@@ -17,7 +17,7 @@
 // Note: `epsCagr5yr` is NOT imported here. It is derived by the caller (see
 // src/lib/digest.ts) and arrives on ScoreInput already computed, because the
 // scorer must not know that the CAGR happens to come from a PEG ratio.
-import { pctFromAth, vsSma150Pct } from './derive'
+import { pctFromAth, vsSma150Pct, type PriceRange } from './derive'
 import { retracementRatio, type Technicals } from './technicals'
 import type { SignalState } from './signals'
 
@@ -79,6 +79,26 @@ export interface ScoreInput {
   ntmState: SignalState
   epsCagr5yr: number | null
   technicals: Technicals | null
+
+  // ── Carried context ───────────────────────────────────────────────
+  // Everything below is passed through to the renderer and the AI payload and
+  // is deliberately NOT read by runGates or runFactors. Scoring on these would
+  // silently change every historical ranking, so the invariance assertions in
+  // scripts/test-signals.ts exist to catch exactly that.
+  forwardPe?: number | null
+  peg5yr?: number | null
+  netMarginTtm?: number | null
+  grossMarginTtm?: number | null
+  operatingMarginTtm?: number | null
+  roiTtm?: number | null
+  epsSurprisePct?: number | null
+  /** Public URL of this pick's rendered chart, attached during preparation
+   *  (Task 6). Absent means the email falls back to the v1 CSS bars. */
+  chartUrl?: string | null
+  change1dPct?: number | null
+  change1wPct?: number | null
+  change1mPct?: number | null
+  fullRange?: PriceRange | null
 }
 
 export type GateKey = 'megacap' | 'yoy' | 'ntm' | 'cagr' | 'belowAth'
@@ -123,6 +143,22 @@ export interface ScoredPick extends Evaluation {
   yoyPct: number | null
   ntmPct: number | null
   epsCagr5yr: number | null
+
+  // ── Carried context ───────────────────────────────────────────────
+  // Same fields as ScoreInput, same rule: carried through by toPick(), never
+  // read by runGates or runFactors.
+  forwardPe?: number | null
+  peg5yr?: number | null
+  netMarginTtm?: number | null
+  grossMarginTtm?: number | null
+  operatingMarginTtm?: number | null
+  roiTtm?: number | null
+  epsSurprisePct?: number | null
+  chartUrl?: string | null
+  change1dPct?: number | null
+  change1wPct?: number | null
+  change1mPct?: number | null
+  fullRange?: PriceRange | null
 }
 
 export interface Selection {
@@ -359,6 +395,18 @@ export function toPick(e: Evaluation): ScoredPick {
     yoyPct: e.input.yoyPct,
     ntmPct: e.input.ntmPct,
     epsCagr5yr: e.input.epsCagr5yr,
+    forwardPe: e.input.forwardPe,
+    peg5yr: e.input.peg5yr,
+    netMarginTtm: e.input.netMarginTtm,
+    grossMarginTtm: e.input.grossMarginTtm,
+    operatingMarginTtm: e.input.operatingMarginTtm,
+    roiTtm: e.input.roiTtm,
+    epsSurprisePct: e.input.epsSurprisePct,
+    chartUrl: e.input.chartUrl,
+    change1dPct: e.input.change1dPct,
+    change1wPct: e.input.change1wPct,
+    change1mPct: e.input.change1mPct,
+    fullRange: e.input.fullRange,
   }
 }
 
@@ -368,7 +416,13 @@ export function toPick(e: Evaluation): ScoredPick {
  *  would otherwise accumulate at roughly 0.5MB/day / 150MB/year of raw market
  *  data inside an audit table, against a 500MB Supabase free-tier cap. Kept
  *  next to ScoredPick/toPick so the audit shape stays defined beside the type
- *  it projects. */
+ *  it projects.
+ *
+ *  The valuation, momentum and range fields added alongside chartUrl (see
+ *  ScoredPick) are single numbers — negligible next to the bar series above —
+ *  so they're included for audit. `chartUrl` itself is excluded: it's not
+ *  carried context but an attached artifact from the preparation phase (Task
+ *  6), not yet populated by anything that flows through here. */
 export interface DigestPickRecord {
   symbol: string
   name: string | null
@@ -382,6 +436,17 @@ export interface DigestPickRecord {
   epsCagr5yr: number | null
   vsSma150Pct: number | null
   pctFromAth: number | null
+  forwardPe: number | null
+  peg5yr: number | null
+  netMarginTtm: number | null
+  grossMarginTtm: number | null
+  operatingMarginTtm: number | null
+  roiTtm: number | null
+  epsSurprisePct: number | null
+  change1dPct: number | null
+  change1wPct: number | null
+  change1mPct: number | null
+  fullRange: PriceRange | null
 }
 
 export function toDigestPickRecord(p: ScoredPick): DigestPickRecord {
@@ -398,6 +463,17 @@ export function toDigestPickRecord(p: ScoredPick): DigestPickRecord {
     epsCagr5yr: p.epsCagr5yr,
     vsSma150Pct: p.vsSma150Pct,
     pctFromAth: p.pctFromAth,
+    forwardPe: p.forwardPe ?? null,
+    peg5yr: p.peg5yr ?? null,
+    netMarginTtm: p.netMarginTtm ?? null,
+    grossMarginTtm: p.grossMarginTtm ?? null,
+    operatingMarginTtm: p.operatingMarginTtm ?? null,
+    roiTtm: p.roiTtm ?? null,
+    epsSurprisePct: p.epsSurprisePct ?? null,
+    change1dPct: p.change1dPct ?? null,
+    change1wPct: p.change1wPct ?? null,
+    change1mPct: p.change1mPct ?? null,
+    fullRange: p.fullRange ?? null,
   }
 }
 

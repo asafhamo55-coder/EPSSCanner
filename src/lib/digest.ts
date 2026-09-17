@@ -3,9 +3,30 @@
 // page cannot rank different stocks.
 
 import { unstable_cache } from 'next/cache'
-import { epsCagr5yr } from './derive'
-import { getWatchlist, liveTechnicals } from './queries'
+import { epsCagr5yr, epsSurprisePct, priceChangePct } from './derive'
+import { getWatchlist, liveTechnicals, type EpsPoint } from './queries'
 import { selectPicks, type ScoreInput, type Selection } from './score'
+
+/** Trading-day lookbacks for the carried momentum fields — 1 day, 1 trading
+ *  week, ~1 trading month. Matches priceChangePct's contract: null (not a
+ *  wrong window) when the visible series is shorter than the lookback. */
+const CHANGE_1D_LOOKBACK = 1
+const CHANGE_1W_LOOKBACK = 5
+const CHANGE_1M_LOOKBACK = 21
+
+/** Newest reported (non-forecast) quarter with both an actual and an
+ *  estimate — `eps` is ordered oldest→newest, so this walks backward from the
+ *  end rather than filtering the whole array. Null when no such quarter
+ *  exists yet. */
+function latestEpsSurprisePct(eps: EpsPoint[]): number | null {
+  for (let i = eps.length - 1; i >= 0; i--) {
+    const e = eps[i]
+    if (!e.isForecast && e.epsActual != null && e.epsEstimate != null) {
+      return epsSurprisePct(e.epsActual, e.epsEstimate)
+    }
+  }
+  return null
+}
 
 /** Matches LIVE_FETCH_CONCURRENCY in queries.ts — same Yahoo endpoint, same
  *  ceiling, so the digest cannot be the thing that gets us rate-limited. */
@@ -36,6 +57,7 @@ export async function buildSelection(): Promise<Selection> {
   }
   const inputs: ScoreInput[] = await mapLimit(watchlist, TECHNICALS_CONCURRENCY, async (t) => {
     const sc = t.scorecard
+    const tech = await liveTechnicals(t.symbol)
     return {
       symbol: t.symbol,
       name: t.name,
@@ -49,7 +71,19 @@ export async function buildSelection(): Promise<Selection> {
       ntmPct: sc.fwd.pct,
       ntmState: sc.fwd.state,
       epsCagr5yr: epsCagr5yr(sc.pe.trailingPe, t.valuation.peg5yr),
-      technicals: await liveTechnicals(t.symbol),
+      technicals: tech,
+      // ── Carried context — see ScoreInput; never read by runGates/runFactors ──
+      forwardPe: sc.fwd.forwardPe,
+      peg5yr: t.valuation.peg5yr,
+      netMarginTtm: t.valuation.netMarginTtm,
+      grossMarginTtm: t.valuation.grossMarginTtm,
+      operatingMarginTtm: t.valuation.operatingMarginTtm,
+      roiTtm: t.valuation.roiTtm,
+      epsSurprisePct: latestEpsSurprisePct(t.eps),
+      change1dPct: tech ? priceChangePct(tech.visible, CHANGE_1D_LOOKBACK) : null,
+      change1wPct: tech ? priceChangePct(tech.visible, CHANGE_1W_LOOKBACK) : null,
+      change1mPct: tech ? priceChangePct(tech.visible, CHANGE_1M_LOOKBACK) : null,
+      fullRange: tech ? tech.fullRange : null,
     }
   })
   return selectPicks(inputs)

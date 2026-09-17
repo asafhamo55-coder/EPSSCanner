@@ -649,6 +649,39 @@ async function main() {
   approx(ddAt(45), 0, 0.01, 'drawdown: -45% is a broken trend, zero credit')
   approx(ddAt(60), 0, 0.01, 'drawdown: beyond -45% stays zero')
 
+  // ── Score invariance across the widened input ────────────────────
+  console.log('\nTripleQ Score — invariance under added context')
+  const widened: ScoreInput = {
+    ...perfect,
+    forwardPe: 22.4,
+    peg5yr: 1.8,
+    netMarginTtm: 0.31,
+    grossMarginTtm: 0.62,
+    operatingMarginTtm: 0.4,
+    roiTtm: 0.27,
+    epsSurprisePct: 6.2,
+    change1dPct: -1.4,
+    change1wPct: 2.9,
+    change1mPct: 8.1,
+    fullRange: { high: 150, low: 60, pctFromHigh: -12, pctFromLow: 25 },
+  }
+  approx(
+    evaluate(widened).score,
+    evaluate(perfect).score,
+    1e-9,
+    'invariance: adding context fields moves the score by exactly zero',
+  )
+  eq(
+    JSON.stringify(evaluate(widened).factors.map((f) => f.points)),
+    JSON.stringify(evaluate(perfect).factors.map((f) => f.points)),
+    'invariance: every individual factor is unchanged',
+  )
+  eq(
+    JSON.stringify(evaluate(widened).gates.map((g) => g.passed)),
+    JSON.stringify(evaluate(perfect).gates.map((g) => g.passed)),
+    'invariance: every gate verdict is unchanged',
+  )
+
   console.log('\nTripleQ Score — selection')
   const mk = (symbol: string, over: Partial<ScoreInput>): ScoreInput => ({ ...perfect, symbol, ...over })
 
