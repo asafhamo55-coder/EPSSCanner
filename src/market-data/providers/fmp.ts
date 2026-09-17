@@ -41,13 +41,40 @@ function apiKey(): string {
   return key
 }
 
+/** Retry budget for rate limiting. 429 is the one status worth retrying here:
+ *  it is explicitly "slow down", not "this request is wrong", and the caller
+ *  (ingestAllActive) now issues several of these in parallel, which is what
+ *  provokes it. Everything else — 401, 403, 404, 5xx — is passed straight
+ *  through, because retrying those just spends the function's remaining
+ *  wall-clock to arrive at the same error.
+ *
+ *  Kept small on purpose. These run inside a 60s serverless function, so the
+ *  worst case has to stay bounded: 0.5s + 1s + 2s = 3.5s of sleeping across
+ *  three retries, per request that is actually being throttled. */
+const RATE_LIMIT_RETRIES = 3
+const RATE_LIMIT_BASE_DELAY_MS = 500
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
 async function get<T>(symbol: string, path: string, params: Record<string, string> = {}): Promise<T> {
   const url = new URL(`${BASE}${path}`)
   url.searchParams.set('apikey', apiKey())
   url.searchParams.set('symbol', symbol)
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v)
 
-  const res = await fetch(url, { headers: { accept: 'application/json' } })
+  let res = await fetch(url, { headers: { accept: 'application/json' } })
+  for (let attempt = 0; res.status === 429 && attempt < RATE_LIMIT_RETRIES; attempt++) {
+    // Honour Retry-After when the server sends one — it knows its own window
+    // better than exponential backoff guesses — but cap it, since a header
+    // asking for 30s is longer than this function is allowed to live.
+    const retryAfter = Number(res.headers.get('retry-after'))
+    const backoff = RATE_LIMIT_BASE_DELAY_MS * 2 ** attempt
+    const waitMs = Number.isFinite(retryAfter) && retryAfter > 0
+      ? Math.min(retryAfter * 1000, 2_000)
+      : backoff
+    await sleep(waitMs)
+    res = await fetch(url, { headers: { accept: 'application/json' } })
+  }
   if (!res.ok) {
     throw new ProviderError(`FMP ${path} → ${res.status}`, symbol, res.status)
   }

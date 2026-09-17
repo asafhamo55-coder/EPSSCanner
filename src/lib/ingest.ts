@@ -185,7 +185,7 @@ export async function ingestTicker(symbol: string): Promise<IngestResult> {
  *  (WARM_CONCURRENCY is 8). Raise only with evidence from provider responses,
  *  not by assumption: a 429 storm degrades the refresh far worse than a slow
  *  one. */
-const INGEST_CONCURRENCY = 5
+const INGEST_CONCURRENCY = 3
 
 export async function ingestAllActive(): Promise<IngestResult[]> {
   const supabase = db()
