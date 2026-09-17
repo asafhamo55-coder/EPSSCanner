@@ -176,6 +176,17 @@ export async function ingestTicker(symbol: string): Promise<IngestResult> {
 /** Refresh every active (non-deleted) ticker. Used by the Refresh-all button
  *  and the weekly cron. Sequential — the watchlist is tiny and this keeps us
  *  well inside provider rate limits. */
+/** How many tickers ingest in parallel. Deliberately modest: every worker is
+ *  a separate fundamentals-provider round trip, and the provider's rate limit
+ *  — not this function — is the binding constraint on raising it. Five is
+ *  enough to bring a ~100-ticker refresh from ~60s (the sequential cost that
+ *  was timing the cron out) to roughly a fifth of that, while staying well
+ *  under the concurrency the Yahoo-backed paths in this codebase already use
+ *  (WARM_CONCURRENCY is 8). Raise only with evidence from provider responses,
+ *  not by assumption: a 429 storm degrades the refresh far worse than a slow
+ *  one. */
+const INGEST_CONCURRENCY = 5
+
 export async function ingestAllActive(): Promise<IngestResult[]> {
   const supabase = db()
   const { data, error } = await supabase
@@ -185,9 +196,36 @@ export async function ingestAllActive(): Promise<IngestResult[]> {
     .is('deleted_at', null)
   if (error) throw new Error(`Failed to list active tickers: ${error.message}`)
 
+  const symbols = ((data ?? []) as { symbol: string }[]).map((r) => r.symbol)
+
+  // Bounded concurrency, not a sequential loop.
+  //
+  // This was `for (…) results.push(await ingestTicker(…))` — one provider
+  // round trip at a time across every active ticker. At ~100 tickers that is
+  // the entire 60s `maxDuration` of the cron that calls it, on its own, and
+  // it is why /api/ingest began returning FUNCTION_INVOCATION_TIMEOUT once a
+  // preparation phase was added after it. Nothing about the work requires
+  // ordering: each ingestTicker upserts its own rows keyed by symbol.
+  //
+  // Failure semantics are deliberately unchanged. The sequential loop had no
+  // per-ticker catch, so one throw aborted the whole run and propagated to
+  // the caller; Promise.all does exactly the same. Making individual tickers
+  // non-fatal is a separate decision with its own consequences (a silently
+  // partial refresh looks identical to a complete one) and is not smuggled
+  // in here.
+  //
+  // Result ORDER is no longer symbol order. The only consumers are
+  // `results.length` and `results.map(r => r.symbol)` for cache warming,
+  // neither of which depends on it.
   const results: IngestResult[] = []
-  for (const row of (data ?? []) as { symbol: string }[]) {
-    results.push(await ingestTicker(row.symbol))
+  let next = 0
+  const worker = async () => {
+    for (let i = next++; i < symbols.length; i = next++) {
+      results.push(await ingestTicker(symbols[i]))
+    }
   }
+  await Promise.all(
+    Array.from({ length: Math.min(INGEST_CONCURRENCY, symbols.length) }, worker),
+  )
   return results
 }
