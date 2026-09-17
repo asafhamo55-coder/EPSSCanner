@@ -82,6 +82,14 @@ const WARM_BUDGET_MS = 12_000
  *  rather than assuming. */
 const ROUTE_BUDGET_MS = 55_000
 
+/** Wall-clock the refresh itself may consume, leaving the rest of
+ *  ROUTE_BUDGET_MS for warming and preparation. Ingest was the one stage
+ *  with no ceiling at all, so a slow or rate-limited provider simply ate the
+ *  whole function and the platform killed it — data published, nothing
+ *  prepared, and a 504 with no body to diagnose from. Tickers past this
+ *  deadline are reported as `skipped`, not silently dropped. */
+const INGEST_BUDGET_MS = 30_000
+
 async function warmTechnicals(symbols: string[]): Promise<{ warmed: number; skipped: number }> {
   const deadline = Date.now() + WARM_BUDGET_MS
   let warmed = 0
@@ -109,7 +117,7 @@ export async function GET(req: NextRequest) {
   }
   try {
     const started = Date.now()
-    const run = await ingestAllActive()
+    const run = await ingestAllActive(Date.now() + INGEST_BUDGET_MS)
     const results = run.results
     publish()
     const remaining = () => ROUTE_BUDGET_MS - (Date.now() - started)
@@ -191,6 +199,7 @@ export async function GET(req: NextRequest) {
       // response that balloons with a hundred provider messages is harder to
       // read at a glance, not easier.
       failedSymbols: run.failures.map((f) => f.symbol),
+      ingestSkipped: run.skipped.length,
       warmed: warm.warmed,
       warmSkipped: warm.skipped,
       prepOk: prep?.ok ?? false,
@@ -230,6 +239,7 @@ export async function POST(req: NextRequest) {
       refreshed: run.results.length,
       failed: run.failures.length,
       failures: run.failures,
+      skipped: run.skipped,
       results: run.results,
     })
   } catch (e) {

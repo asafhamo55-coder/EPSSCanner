@@ -56,6 +56,21 @@ const RATE_LIMIT_BASE_DELAY_MS = 500
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
+/** Circuit breaker for an exhausted quota.
+ *
+ *  Retrying a 429 is right when one request got unlucky and wrong when the
+ *  plan's window is simply spent — then EVERY request 429s, each burns its
+ *  full retry ladder, and a refresh that would have failed fast instead
+ *  spends the whole serverless budget sleeping. That is not hypothetical:
+ *  it is how /api/ingest went from failing in 18s to timing out at 60s.
+ *
+ *  After this many 429s in a row across the process, retrying stops and 429s
+ *  surface immediately. Any success resets it, so a genuinely transient
+ *  burst does not trip the breaker permanently. Process-wide state is
+ *  acceptable here precisely because the quota it models is account-wide. */
+const RATE_LIMIT_BREAKER_TRIP = 8
+let consecutive429 = 0
+
 async function get<T>(symbol: string, path: string, params: Record<string, string> = {}): Promise<T> {
   const url = new URL(`${BASE}${path}`)
   url.searchParams.set('apikey', apiKey())
@@ -63,7 +78,13 @@ async function get<T>(symbol: string, path: string, params: Record<string, strin
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v)
 
   let res = await fetch(url, { headers: { accept: 'application/json' } })
-  for (let attempt = 0; res.status === 429 && attempt < RATE_LIMIT_RETRIES; attempt++) {
+  for (
+    let attempt = 0;
+    res.status === 429 &&
+    attempt < RATE_LIMIT_RETRIES &&
+    consecutive429 < RATE_LIMIT_BREAKER_TRIP;
+    attempt++
+  ) {
     // Honour Retry-After when the server sends one — it knows its own window
     // better than exponential backoff guesses — but cap it, since a header
     // asking for 30s is longer than this function is allowed to live.
@@ -74,6 +95,17 @@ async function get<T>(symbol: string, path: string, params: Record<string, strin
       : backoff
     await sleep(waitMs)
     res = await fetch(url, { headers: { accept: 'application/json' } })
+  }
+  if (res.status === 429) {
+    consecutive429++
+    if (consecutive429 === RATE_LIMIT_BREAKER_TRIP) {
+      console.error(
+        `[fmp] ${RATE_LIMIT_BREAKER_TRIP} consecutive 429s — quota looks exhausted; ` +
+          'no longer retrying rate limits this run',
+      )
+    }
+  } else {
+    consecutive429 = 0
   }
   if (!res.ok) {
     throw new ProviderError(`FMP ${path} → ${res.status}`, symbol, res.status)

@@ -190,6 +190,11 @@ export async function ingestTicker(symbol: string): Promise<IngestResult> {
 export interface IngestRun {
   results: IngestResult[]
   failures: IngestFailure[]
+  /** Tickers never attempted because the deadline passed first. Distinct
+   *  from `failures`, which WERE attempted and errored — the difference
+   *  matters when reading a cron's output: skipped means "ran out of time",
+   *  failed means "the provider said no". */
+  skipped: string[]
 }
 
 /** How many tickers ingest in parallel. Deliberately modest: every worker is
@@ -203,7 +208,7 @@ export interface IngestRun {
  *  one. */
 const INGEST_CONCURRENCY = 3
 
-export async function ingestAllActive(): Promise<IngestRun> {
+export async function ingestAllActive(deadline?: number): Promise<IngestRun> {
   const supabase = db()
   const { data, error } = await supabase
     .from('screener_tickers')
@@ -214,7 +219,7 @@ export async function ingestAllActive(): Promise<IngestRun> {
 
   const symbols = ((data ?? []) as { symbol: string }[]).map((r) => r.symbol)
 
-  // Bounded concurrency, not a sequential loop.
+  // Bounded concurrency AND a deadline — neither of which this had.
   //
   // This was `for (…) results.push(await ingestTicker(…))` — one provider
   // round trip at a time across every active ticker. At ~100 tickers that is
@@ -240,9 +245,16 @@ export async function ingestAllActive(): Promise<IngestRun> {
   // neither of which depends on it.
   const results: IngestResult[] = []
   const failures: IngestFailure[] = []
+  const skipped: string[] = []
   let next = 0
   const worker = async () => {
     for (let i = next++; i < symbols.length; i = next++) {
+      // Stop STARTING new tickers past the deadline; one already in flight
+      // finishes. Same shape as warmTechnicals and renderCharts.
+      if (deadline != null && Date.now() > deadline) {
+        skipped.push(symbols[i])
+        continue
+      }
       try {
         results.push(await ingestTicker(symbols[i]))
       } catch (e) {
@@ -259,5 +271,10 @@ export async function ingestAllActive(): Promise<IngestRun> {
         failures.map((f) => `${f.symbol} (${f.error})`).join(', '),
     )
   }
-  return { results, failures }
+  if (skipped.length > 0) {
+    console.warn(
+      `[ingest] deadline hit — refreshed ${results.length}, skipped ${skipped.length} of ${symbols.length}`,
+    )
+  }
+  return { results, failures, skipped }
 }
