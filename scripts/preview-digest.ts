@@ -33,6 +33,7 @@ function mkTech(positionPct: number, close: number, fib: Fib | null): Technicals
     positionPct,
     signals: null,
     windowBars: 126,
+    fullRange: null,
   }
 }
 

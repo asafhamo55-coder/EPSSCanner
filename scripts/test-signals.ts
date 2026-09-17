@@ -41,7 +41,14 @@ import {
 } from '../src/lib/technicals'
 import type { Bar } from '../src/market-data/provider'
 import type { Fib, Technicals } from '../src/lib/technicals'
-import { epsCagr5yr, pctFromAth, vsSma150Pct } from '../src/lib/derive'
+import {
+  epsCagr5yr,
+  epsSurprisePct,
+  fiftyTwoWeekRange,
+  pctFromAth,
+  priceChangePct,
+  vsSma150Pct,
+} from '../src/lib/derive'
 import { renderConfirm } from '../src/lib/email/confirm'
 import { renderDigest } from '../src/lib/email/render'
 import {
@@ -494,6 +501,7 @@ async function main() {
       positionPct,
       signals: null,
       windowBars: 126,
+      fullRange: null,
     }
   }
 
@@ -789,6 +797,37 @@ async function main() {
   eq(rendererFullHtml.includes('<svg'), false, 'renderDigest: no inline SVG anywhere in the output')
   eq(rendererFullHtml.includes('display:flex'), false, 'renderDigest: no flexbox layout anywhere in the output')
   eq(rendererFullHtml.includes('display:grid'), false, 'renderDigest: no grid layout anywhere in the output')
+
+  // ── Derivations: momentum, range, surprise ───────────────────────
+  console.log('\nDerivations — momentum and range')
+  // closes 100..109 over 10 bars
+  const mBars = Array.from({ length: 10 }, (_, i) => ({ t: i, o: 0, h: 0, l: 0, c: 100 + i }))
+  approx(priceChangePct(mBars, 1), (109 / 108 - 1) * 100, 0.01, 'priceChangePct(1): 109 vs 108 ≈ +0.93%')
+  approx(priceChangePct(mBars, 5), (109 / 104 - 1) * 100, 1e-9, 'priceChangePct(5): 109 vs 104')
+  eq(priceChangePct(mBars, 20), null, 'priceChangePct: lookback beyond history returns null')
+  eq(priceChangePct([], 1), null, 'priceChangePct: empty series returns null')
+
+  const rBars = [
+    { t: 0, o: 0, h: 120, l: 80, c: 100 },
+    { t: 1, o: 0, h: 150, l: 95, c: 140 },
+    { t: 2, o: 0, h: 130, l: 60, c: 75 },
+  ]
+  const r52 = fiftyTwoWeekRange(rBars)
+  approx(r52?.high ?? null, 150, 1e-9, 'fiftyTwoWeekRange: high is the max of highs')
+  approx(r52?.low ?? null, 60, 1e-9, 'fiftyTwoWeekRange: low is the min of lows')
+  approx(r52?.pctFromHigh ?? null, (75 / 150 - 1) * 100, 1e-9, 'fiftyTwoWeekRange: last close vs high')
+  approx(r52?.pctFromLow ?? null, (75 / 60 - 1) * 100, 1e-9, 'fiftyTwoWeekRange: last close vs low')
+  eq(fiftyTwoWeekRange([]), null, 'fiftyTwoWeekRange: empty series returns null')
+
+  approx(epsSurprisePct(1.2, 1.0), 20, 1e-9, 'epsSurprisePct: 1.20 actual vs 1.00 estimate = +20%')
+  approx(epsSurprisePct(0.8, 1.0), -20, 1e-9, 'epsSurprisePct: a miss is negative')
+  eq(epsSurprisePct(1.2, 0), null, 'epsSurprisePct: zero estimate returns null, not Infinity')
+  eq(epsSurprisePct(null, 1.0), null, 'epsSurprisePct: missing actual returns null')
+
+  // analyze() surfaces the full-series range so nothing re-walks the bars
+  const rangeTech = analyze(rBars)
+  approx(rangeTech.fullRange?.high ?? null, 150, 1e-9, 'analyze: fullRange.high')
+  eq(analyze([]).fullRange, null, 'analyze([]): fullRange is null')
 
   // ── Result ───────────────────────────────────────────────────────
   console.log('')

@@ -6,6 +6,7 @@
 // Verified in scripts/test-signals.ts.
 
 import type { Bar } from '@/market-data/provider'
+import { fiftyTwoWeekRange, type PriceRange } from './derive'
 
 // ─── Constants (binding — see task-2 brief) ─────────────────────────
 /** Bars needed before `VISIBLE_BARS` so the 150-day SMA is defined for every
@@ -105,6 +106,10 @@ export interface Technicals {
    *  short-history window from array length — a channel built on fewer than
    *  VISIBLE_BARS bars is still a full-confidence-looking verdict otherwise. */
   windowBars: number
+  /** High/low across the FULL fetched series (not the visible window), with
+   *  the last close's distance from each. Computed here so the email and the
+   *  chart never re-walk 276 bars to answer the same question. */
+  fullRange: PriceRange | null
 }
 
 // ─── SMA ─────────────────────────────────────────────────────────────
@@ -427,5 +432,6 @@ export function analyze(bars: Bar[]): Technicals {
     positionPct,
     signals,
     windowBars: visible.length,
+    fullRange: fiftyTwoWeekRange(bars),
   }
 }
