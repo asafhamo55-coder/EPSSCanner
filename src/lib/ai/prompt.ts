@@ -177,30 +177,6 @@ function roundTo(n: number, digits: number): number {
   return Math.round(n * f) / f
 }
 
-/** Window sizes and ratios this system itself defines, not figures about any
- *  stock. 1/5/21 are the momentum lookback windows in trading days (day/
- *  week/month — CHANGE_1D_LOOKBACK etc. in digest.ts), 52 is the standard
- *  "52-week range" phrasing, 126/150/252 are this system's own bar-window
- *  constants (VISIBLE_BARS, SMA_PERIOD, and the ~252-trading-day year the
- *  "52-week range" is now actually computed over — see technicals.ts), and
- *  23.6/38.2/50/61.8/78.6 are the Fibonacci retracement ratios (FIB_LEVELS,
- *  technicals.ts) written as the percentages a trader would actually use.
- *
- *  Without this, the natural way to describe the task's own output —
- *  "holding above its 150-day average", "near the top of its 52-week
- *  range" — trips the grounding guard: `numericTokens` reads "150" or "52"
- *  off the prose, no payload NUMBER happens to equal them, and
- *  `commentary.ts` drops the whole day's market read plus all ten per-stock
- *  lines over phrasing, not a fabrication. These are unioned into the
- *  grounded set unconditionally (the same way `identifyingStrings` admits
- *  symbols/names below) because they're vocabulary this system defines for
- *  itself, not a reading about a particular stock. The accepted tradeoff:
- *  since matching is purely numeric (no context), a genuinely fabricated
- *  "$150 target" would also now pass — the same documented "coarse net, not
- *  a fact-checker" limitation `isGrounded`'s own doc comment already names
- *  for a real number attached to the wrong claim. */
-export const STRUCTURAL_TOKENS = [1, 5, 21, 52, 126, 150, 252, 23.6, 38.2, 50, 61.8, 78.6] as const
-
 /** Every number derivable from the payload's NUMERIC fields only: full
  *  precision, rounded to 1 decimal, rounded to 0 decimals, and the absolute
  *  value of each of those — so a payload value of 12.43 legitimises the
@@ -208,15 +184,13 @@ export const STRUCTURAL_TOKENS = [1, 5, 21, 52, 126, 150, 252, 23.6, 38.2, 50, 6
  *  pctFromAth: -25 legitimises a prose description of the magnitude ("25%
  *  below the high") without the sign. Digits embedded in strings (an index
  *  name, a symbol, a factor label) are never included here — see
- *  `identifyingStrings` / `stripIdentifyingStrings` for how those are
- *  handled instead. STRUCTURAL_TOKENS is unioned in unconditionally, on top
- *  of whatever the payload itself contains — see its own doc comment for
- *  why those specific numbers get a pass regardless of this payload's
- *  actual values. */
+ *  `identifyingStrings` / `stripIdentifyingStrings` and
+ *  `STRUCTURAL_PHRASE_PATTERNS` / `stripStructuralPhrases` for how those are
+ *  handled instead. */
 function groundedNumbers(payload: CommentaryPayload): number[] {
   const raw: number[] = []
   collectNumbers(payload, raw)
-  const out: number[] = [...STRUCTURAL_TOKENS]
+  const out: number[] = []
   for (const n of raw) {
     for (const v of [n, Math.abs(n)]) {
       out.push(v, roundTo(v, 1), roundTo(v, 0))
@@ -269,12 +243,61 @@ function stripIdentifyingStrings(text: string, strings: string[]): string {
   return out
 }
 
+// ─── Structural phrases: period names and Fib ratios, IN CONTEXT ──────
+// A first version of this admitted a fixed list of "structural" numbers
+// (1/5/21/52/126/150/252, the Fib ratios) into the grounded pool
+// UNCONDITIONALLY, on the reasoning that "holding above its 150-day
+// average" shouldn't need a payload value of 150 to pass. It worked for
+// that sentence, but a bare numeric-token check has no notion of context:
+// admitting 150 as a VALUE, not as part of the phrase "150-day", also
+// admitted a fabricated "$150 target", a fabricated "52% gain", a
+// fabricated "operating margin reached 21%" — every one of those digits
+// legitimised regardless of what word (if any) followed it. Round
+// single-digit and round-50 percentages are exactly the shape a
+// hallucinating model tends to produce, so that version surrendered a good
+// deal of the guard's purpose to buy a handful of phrasings.
+//
+// Same fix shape as `identifyingStrings`/`stripIdentifyingStrings` above:
+// strip the phrase, don't admit the value. Each pattern below only matches
+// a structural number when it is ACTUALLY USED as a period or ratio name —
+// "150-day", "52-week", "61.8% retracement" — not as a bare figure. A
+// matched phrase is removed from the prose entirely before tokenizing, so
+// its digits are never seen; a bare "$150" or "21%" with no structural word
+// attached is left untouched and checked against the payload like any other
+// number, same as before this feature existed.
+const STRUCTURAL_PHRASE_PATTERNS: RegExp[] = [
+  // "150-day", "52-week", "21-day", "5-bar", "1-session" — the window
+  // constants (CHANGE_1D_LOOKBACK/1W/1M in digest.ts; VISIBLE_BARS,
+  // SMA_PERIOD, and the ~252-trading-day year in technicals.ts) named as a
+  // hyphenated period, singular or plural.
+  /\b(1|5|21|52|126|150|252)-(day|week|bar|session)s?\b/gi,
+  // "52 week" (space, not hyphen) — the one period name common enough to
+  // admit both spellings.
+  /\b52[- ]week\b/gi,
+  // A Fib ratio (FIB_LEVELS, technicals.ts) ONLY when a Fib word sits
+  // immediately after it — "61.8% retracement", "50 fib", "38.2%
+  // level" — not a bare "50%" or "61.8" with no such word nearby.
+  /\b(23\.6|38\.2|50|61\.8|78\.6)\s*%?\s*(fib|fibonacci|retracement|level|zone)/gi,
+]
+
+/** Removes every structural period-name/Fib phrase from `text` — see
+ *  `STRUCTURAL_PHRASE_PATTERNS`' own comment for why this strips phrases
+ *  rather than admitting bare values. */
+function stripStructuralPhrases(text: string): string {
+  let out = text
+  for (const re of STRUCTURAL_PHRASE_PATTERNS) {
+    out = out.replace(re, ' ')
+  }
+  return out
+}
+
 const GROUNDING_EPSILON = 1e-9
 
 /** Coarse grounding guard: true only if every numeric literal in `text` —
- *  after identifying phrases (index/company names, symbols) are stripped out
- *  — matches, at full precision or a supported rounding, some number
- *  actually present in the payload's numeric fields.
+ *  after identifying phrases (index/company names, symbols) and structural
+ *  period-name/Fib phrases ("150-day", "52-week", "61.8% retracement") are
+ *  stripped out — matches, at full precision or a supported rounding, some
+ *  number actually present in the payload's numeric fields.
  *
  *  This catches an invented figure like "$412.50" when no payload number is
  *  anywhere near it. It does NOT catch a misdescribed trend — text that
@@ -284,7 +307,7 @@ const GROUNDING_EPSILON = 1e-9
  *  fact-checker for the sentence around them. */
 export function isGrounded(text: string, payload: CommentaryPayload): boolean {
   const grounded = groundedNumbers(payload)
-  const stripped = stripIdentifyingStrings(text, identifyingStrings(payload))
+  const stripped = stripStructuralPhrases(stripIdentifyingStrings(text, identifyingStrings(payload)))
   return numericTokens(stripped).every((tok) => {
     const n = Number.parseFloat(tok)
     return grounded.some((g) => Math.abs(g - n) < GROUNDING_EPSILON)

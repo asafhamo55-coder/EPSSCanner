@@ -73,7 +73,11 @@ function genBars(n: number, start: number, drift: number, amp: number, seed: num
     const c = price
     const h = Math.max(o, c) + Math.abs(noise) * 0.35
     const l = Math.max(0.25, Math.min(o, c) - Math.abs(noise) * 0.35)
-    bars.push({ t: i, o, h, l, c })
+    // Real Unix-second daily timestamps, not the bar index — the date axis
+    // (src/lib/chart/render.ts) reads `t` directly, and an index here would
+    // collapse every label to the same calendar day near the Unix epoch,
+    // making the axis look broken to a reviewer even though it isn't.
+    bars.push({ t: Math.floor(Date.now() / 1000) - (n - 1 - i) * 86_400, o, h, l, c })
   }
   return bars
 }
