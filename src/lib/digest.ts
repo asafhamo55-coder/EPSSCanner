@@ -140,8 +140,31 @@ const CHART_CONCURRENCY = 4
 /** Preparation's own deadline, separate from (and smaller than) the ingest
  *  route's `maxDuration`. Ingest itself plus its post-publish warm phase
  *  (WARM_BUDGET_MS) both run before this, so this budget has to leave room
- *  for both ahead of it inside the same 60s function. */
+ *  for both ahead of it inside the same 60s function.
+ *
+ *  What this actually bounds: `renderCharts` stops STARTING new charts once
+ *  this deadline passes (a chart already in flight can still run past it —
+ *  see the note on `renderCharts`), and the remaining time after charts,
+ *  minus `UPSERT_RESERVE_MS`, is what the AI stage below is raced against.
+ *  It does not bound the upsert itself, which is why time is reserved for
+ *  it rather than raced. */
 const PREP_BUDGET_MS = 25_000
+
+/** Reserved off the end of PREP_BUDGET_MS so the upsert always has time to
+ *  run after everything above it. A persisted partial row — whatever charts
+ *  and/or AI commentary finished before the clock ran out — is the entire
+ *  point of this phase's degrade-don't-fail design; that design is broken if
+ *  the AI stage is allowed to eat the deadline down to zero and leave
+ *  nothing for the write that actually persists the day's work. */
+const UPSERT_RESERVE_MS = 4_000
+
+/** Below this much remaining budget, attempting AI commentary is not
+ *  worthwhile — fetching indices and running the Claude call cannot usefully
+ *  complete in less time than this, so preparation skips straight to the
+ *  upsert with `ai_ok: false` rather than gambling the reserve away. A
+ *  skipped commentary is a degraded email; racing a call that never had a
+ *  real chance just delays reaching the write below. */
+const AI_MIN_MS = 8_000
 
 /** Renders and uploads a chart per pick, mutating `chartUrl` onto the
  *  ScoredPick in place. `renderChart`/`uploadChart` already never throw —
@@ -218,14 +241,59 @@ export async function prepareDigest(prepOn: string): Promise<PrepResult> {
     return 0
   })
 
-  const indices = await getIndices().catch((e) => {
-    console.error(`[prep] indices failed: ${(e as Error).message}`)
-    return []
-  })
-  const commentary = await generateCommentary(selection.picks, indices).catch((e) => {
-    console.error(`[prep] commentary threw: ${(e as Error).message}`)
-    return null
-  })
+  // Budget left for the AI stage, with UPSERT_RESERVE_MS carved out so the
+  // write below always has time to run — see PREP_BUDGET_MS/UPSERT_RESERVE_MS.
+  // Can be small or negative if chart rendering ran long (a chart already in
+  // flight when renderCharts' own deadline passed is not aborted — see the
+  // note there); either way this check is what keeps that from eating the
+  // reserve.
+  const aiBudgetMs = deadline - Date.now() - UPSERT_RESERVE_MS
+  let commentary: Awaited<ReturnType<typeof generateCommentary>> = null
+  if (aiBudgetMs < AI_MIN_MS) {
+    console.warn(
+      `[prep] skipping AI commentary — ${Math.max(aiBudgetMs, 0)}ms left of budget, need at least ${AI_MIN_MS}ms`,
+    )
+  } else {
+    // A platform kill at maxDuration is NOT a rejected promise a .catch() can
+    // see — the process dies mid-flight, the upsert below never runs, and a
+    // day whose charts already rendered successfully would persist nothing
+    // at all. Racing against a timer we control means WE decide the failure
+    // instead of the platform: losing the race resolves to null and the row
+    // still gets written, degraded; losing the function loses the whole day.
+    // Same pattern, same reasoning, as TECHNICALS_TIMEOUT_MS in
+    // src/app/actions.ts.
+    //
+    // This does NOT abort the underlying Yahoo/Anthropic HTTP requests — it
+    // only stops THIS function from waiting on them. That's sufficient:
+    // once prepareDigest returns, the runtime tears the request down
+    // regardless. Do not "improve" this into an AbortController — that
+    // changes what is being raced (the request) rather than how long this
+    // function waits for it, which is not the failure mode being guarded
+    // against here.
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      commentary = await Promise.race([
+        (async () => {
+          const indices = await getIndices().catch((e) => {
+            console.error(`[prep] indices failed: ${(e as Error).message}`)
+            return []
+          })
+          return generateCommentary(selection.picks, indices)
+        })().catch((e) => {
+          console.error(`[prep] commentary threw: ${(e as Error).message}`)
+          return null
+        }),
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => {
+            console.warn(`[prep] AI commentary timed out after ${aiBudgetMs}ms`)
+            resolve(null)
+          }, aiBudgetMs)
+        }),
+      ])
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+  }
 
   const records: PrepPickRecord[] = selection.picks.map((p) => ({
     ...toDigestPickRecord(p),
