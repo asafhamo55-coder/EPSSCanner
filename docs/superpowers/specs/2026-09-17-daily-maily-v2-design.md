@@ -26,7 +26,7 @@ has — the day is claimed, some subscribers are mailed, and nothing is recorded
 
 ```
 09:30 UTC  /api/ingest   ingest → publish → PREPARE  (score, render charts, AI commentary) → persist
-11:30 UTC  /api/digest   read prepared row → render per-subscriber HTML → send
+11:00 UTC  /api/digest   read prepared row → render per-subscriber HTML → send
 ```
 
 Preparation is a new phase appended to the ingest route. The digest route no
