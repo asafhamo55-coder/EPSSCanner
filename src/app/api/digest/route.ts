@@ -15,6 +15,7 @@ import {
 } from '@/lib/subscribers'
 import { siteUrl } from '@/lib/site'
 import { db } from '@/lib/db'
+import { easternDate } from '@/lib/eastern'
 
 // The TripleQ Daily Maily.
 //
@@ -46,19 +47,6 @@ function easternHour(now: Date): number {
   return Number(
     new Intl.DateTimeFormat('en-US', { timeZone: TZ, hour: 'numeric', hour12: false }).format(now),
   )
-}
-
-/** Today's Eastern calendar date as 'YYYY-MM-DD' — the idempotency key. Must be
- *  Eastern, not UTC: at 06:00 ET the UTC date is the same day, but deriving it
- *  from UTC would drift the moment the schedule or the timezone rules change. */
-function easternDate(now: Date): string {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: TZ,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(now)
-  return parts
 }
 
 function easternLabel(now: Date): string {

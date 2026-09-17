@@ -10,6 +10,12 @@ const SECURITY_HEADERS = [
 ]
 
 const config: NextConfig = {
+  // @napi-rs/canvas (src/lib/chart/render.ts) ships a native .node binary.
+  // Webpack cannot bundle that — it tries to parse it as JS and fails the
+  // build ("Unexpected character") — so this package must be excluded from
+  // the server bundle and required at runtime via Node's own require()
+  // instead, the standard fix for native addons in Next 15 route handlers.
+  serverExternalPackages: ['@napi-rs/canvas'],
   async headers() {
     return [{ source: '/:path*', headers: SECURITY_HEADERS }]
   },

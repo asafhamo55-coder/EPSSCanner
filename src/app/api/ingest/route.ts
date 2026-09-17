@@ -2,6 +2,8 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { ingestAllActive, ingestTicker } from '@/lib/ingest'
 import { publish } from '@/lib/publish'
 import { liveTechnicals } from '@/lib/queries'
+import { prepareDigest } from '@/lib/digest'
+import { easternDate } from '@/lib/eastern'
 
 // Ingest endpoint — same idempotent path used by the UI server actions.
 //
@@ -45,8 +47,13 @@ const WARM_CONCURRENCY = 8
  *  and its runtime is the variable one; without this ceiling a slow ingest plus
  *  warming could hit the platform limit and kill the whole invocation AFTER the
  *  data was already published. Workers stop starting new symbols past the
- *  budget rather than being cut off mid-flight. */
-const WARM_BUDGET_MS = 20_000
+ *  budget rather than being cut off mid-flight.
+ *
+ *  Reduced from 20s to 12s to make room for the preparation phase that now
+ *  runs after this (prepareDigest, src/lib/digest.ts — its own
+ *  PREP_BUDGET_MS is 25s), so ingest + warm + prep stay inside this route's
+ *  60s `maxDuration`. */
+const WARM_BUDGET_MS = 12_000
 
 async function warmTechnicals(symbols: string[]): Promise<{ warmed: number; skipped: number }> {
   const deadline = Date.now() + WARM_BUDGET_MS
@@ -81,11 +88,24 @@ export async function GET(req: NextRequest) {
       warmed: 0,
       skipped: results.length,
     }))
+    // Preparation runs last and is the least important part of the cron: the
+    // data is already ingested and published by this point. Bounded and
+    // best-effort for the same reason warming is — a preparation failure must
+    // never fail an ingest that already succeeded, and the digest route falls
+    // back to scoring inline when the row is absent.
+    const prep = await prepareDigest(easternDate(new Date())).catch((e) => {
+      console.error(`[prep] failed: ${(e as Error).message}`)
+      return null
+    })
     return NextResponse.json({
       ok: true,
       refreshed: results.length,
       warmed: warm.warmed,
       warmSkipped: warm.skipped,
+      prepOk: prep?.ok ?? false,
+      prepPicks: prep?.picks ?? 0,
+      prepCharts: prep?.chartsRendered ?? 0,
+      prepAiOk: prep?.aiOk ?? false,
     })
   } catch (e) {
     return NextResponse.json({ ok: false, error: (e as Error).message }, { status: 502 })
