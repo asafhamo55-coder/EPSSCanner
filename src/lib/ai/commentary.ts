@@ -44,7 +44,18 @@ export async function generateCommentary(
     const client = new Anthropic()
     const response = await client.messages.parse({
       model: 'claude-opus-5',
-      max_tokens: 4000,
+      // Thinking is on by default on Opus 5, and max_tokens caps thinking PLUS
+      // the response text together — not the response alone. At effort:
+      // 'low' thinking should be short, but nothing guarantees it leaves room
+      // for a market read plus up to ten per-stock sentences; if it doesn't,
+      // the response truncates mid-JSON, parse() throws, and the catch below
+      // returns null — safe, but failing far more often than intended and for
+      // a reason nobody would diagnose from the outside. 8000 is a ceiling,
+      // not a target: we only pay for tokens actually generated, so raising
+      // it costs nothing unless it's used. Do NOT disable thinking instead —
+      // that carries its own documented failure modes on Opus 5 and buys
+      // nothing here.
+      max_tokens: 8000,
       system: SYSTEM_PROMPT,
       output_config: {
         effort: 'low',

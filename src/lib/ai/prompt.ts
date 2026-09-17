@@ -142,18 +142,27 @@ export function numericTokens(text: string): string[] {
   return text.match(/\d+(?:\.\d+)?/g) ?? []
 }
 
+// Numbers are pulled ONLY from numeric payload fields — never from digits
+// embedded in strings. An earlier version pooled digits found inside
+// identifying strings (index names, symbols) into the grounded set, on the
+// reasoning that "S&P 500" or "Nasdaq-100" are labels the payload already
+// spells out. But that pool was global and unscoped: "S&P 500" grounded a
+// fabricated "$500" price on an unrelated stock, "Nasdaq-100" and "Russell
+// 2000" did the same for 100 and 2000, and worst of all `factors[].label`
+// values like "SMA 150 proximity" are attached to every single pick, so
+// "150" was grounded every day regardless of the actual data. Round prices
+// and round percentages are exactly what a hallucinating model tends to
+// produce, and that pool waved all of them through.
+//
+// The fix strips identifying phrases OUT of the prose before tokenizing it,
+// instead of admitting their digits into the pool. "The S&P 500 is up 12.4%"
+// has "S&P 500" removed first, leaving " is up 12.4%" — the remaining "12.4"
+// is then checked against real numeric payload values, same as any other
+// figure. A fabricated "$500" on an unrelated stock is no longer grounded by
+// the mere existence of an index sharing that digit string.
 function collectNumbers(value: unknown, out: number[]): void {
   if (typeof value === 'number') {
     if (Number.isFinite(value)) out.push(value)
-  } else if (typeof value === 'string') {
-    // Numbers embedded in identifying strings — an index name like "S&P
-    // 500", a symbol — are legitimately reproducible verbatim; they are not
-    // figures the model computed, they're labels the payload already spells
-    // out digit-for-digit.
-    for (const tok of numericTokens(value)) {
-      const n = Number.parseFloat(tok)
-      if (Number.isFinite(n)) out.push(n)
-    }
   } else if (Array.isArray(value)) {
     for (const v of value) collectNumbers(v, out)
   } else if (value != null && typeof value === 'object') {
@@ -166,14 +175,15 @@ function roundTo(n: number, digits: number): number {
   return Math.round(n * f) / f
 }
 
-/** Every number derivable from the payload: numeric fields at full precision,
- *  rounded to 1 decimal, rounded to 0 decimals, and the absolute value of
- *  each of those — so a payload value of 12.43 legitimises the model writing
- *  "12.43", "12.4" or "12", and a negative reading like pctFromAth: -25
- *  legitimises a prose description of the magnitude ("25% below the high")
- *  without the sign — plus digits embedded in identifying strings (an index
- *  name like "S&P 500"), since those are labels the payload already spells
- *  out, not figures the model computed. */
+/** Every number derivable from the payload's NUMERIC fields only: full
+ *  precision, rounded to 1 decimal, rounded to 0 decimals, and the absolute
+ *  value of each of those — so a payload value of 12.43 legitimises the
+ *  model writing "12.43", "12.4" or "12", and a negative reading like
+ *  pctFromAth: -25 legitimises a prose description of the magnitude ("25%
+ *  below the high") without the sign. Digits embedded in strings (an index
+ *  name, a symbol, a factor label) are never included here — see
+ *  `identifyingStrings` / `stripIdentifyingStrings` for how those are
+ *  handled instead. */
 function groundedNumbers(payload: CommentaryPayload): number[] {
   const raw: number[] = []
   collectNumbers(payload, raw)
@@ -186,11 +196,56 @@ function groundedNumbers(payload: CommentaryPayload): number[] {
   return out
 }
 
+/** Identifying strings from the payload — index keys/names, pick
+ *  symbols/names — that are legitimately reproducible verbatim because the
+ *  payload already spells them out digit-for-digit. Digits inside these
+ *  (an index name like "S&P 500", a symbol like "TA-35") are not figures the
+ *  model computed, so rather than admitting them into the numeric grounding
+ *  pool, `isGrounded` strips the phrase itself out of the prose before
+ *  tokenizing — the digits are then simply never seen.
+ *
+ *  Deliberately excludes `factors[].label` and `factors[].key`: those are
+ *  fixed model vocabulary repeated on every single pick (e.g. "SMA 150
+ *  proximity"), not payload data. Treating them as identifying strings would
+ *  strip "150" out of every pick's commentary regardless of whether that
+ *  pick's data has anything to do with 150 — the same universal leak this
+ *  fix exists to close, just moved from the number pool to the strip list. */
+function identifyingStrings(payload: CommentaryPayload): string[] {
+  const strings: string[] = []
+  for (const i of payload.indices) {
+    if (i.key) strings.push(i.key)
+    if (i.name) strings.push(i.name)
+  }
+  for (const p of payload.picks) {
+    if (p.symbol) strings.push(p.symbol)
+    if (p.name) strings.push(p.name)
+  }
+  // Longest first, so e.g. "Nasdaq-100" is stripped whole before any shorter
+  // string that might otherwise consume part of it first.
+  return [...new Set(strings)].sort((a, b) => b.length - a.length)
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/** Removes every identifying phrase from `text`, case-insensitively, so
+ *  digits that are part of a label — not a figure — never reach the
+ *  tokenizer. */
+function stripIdentifyingStrings(text: string, strings: string[]): string {
+  let out = text
+  for (const s of strings) {
+    out = out.replace(new RegExp(escapeRegExp(s), 'gi'), ' ')
+  }
+  return out
+}
+
 const GROUNDING_EPSILON = 1e-9
 
-/** Coarse grounding guard: true only if every numeric literal in `text`
- *  matches — at full precision or a supported rounding — some number
- *  actually present in `payload`.
+/** Coarse grounding guard: true only if every numeric literal in `text` —
+ *  after identifying phrases (index/company names, symbols) are stripped out
+ *  — matches, at full precision or a supported rounding, some number
+ *  actually present in the payload's numeric fields.
  *
  *  This catches an invented figure like "$412.50" when no payload number is
  *  anywhere near it. It does NOT catch a misdescribed trend — text that
@@ -200,7 +255,8 @@ const GROUNDING_EPSILON = 1e-9
  *  fact-checker for the sentence around them. */
 export function isGrounded(text: string, payload: CommentaryPayload): boolean {
   const grounded = groundedNumbers(payload)
-  return numericTokens(text).every((tok) => {
+  const stripped = stripIdentifyingStrings(text, identifyingStrings(payload))
+  return numericTokens(stripped).every((tok) => {
     const n = Number.parseFloat(tok)
     return grounded.some((g) => Math.abs(g - n) < GROUNDING_EPSILON)
   })
