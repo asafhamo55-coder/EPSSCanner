@@ -117,7 +117,14 @@ export async function refreshAllAction(): Promise<ActionResult> {
     const res = await ingestAllActive()
     revalidateTag('yahoo-live')
     revalidatePath('/')
-    return { ok: true, message: `Refreshed ${res.length} ticker${res.length === 1 ? '' : 's'}.` }
+    const n = res.results.length
+    const failed = res.failures.length
+    return {
+      ok: true,
+      message:
+        `Refreshed ${n} ticker${n === 1 ? '' : 's'}.` +
+        (failed > 0 ? ` ${failed} failed: ${res.failures.map((f) => f.symbol).join(', ')}.` : ''),
+    }
   } catch (e) {
     return { ok: false, error: (e as Error).message }
   }

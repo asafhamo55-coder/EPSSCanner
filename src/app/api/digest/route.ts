@@ -198,8 +198,8 @@ export async function GET(req: NextRequest) {
     let refreshed = 0
     let didIngest = false
     if (!(await snapshotIsFresh(today))) {
-      const results = await ingestAllActive()
-      refreshed = results.length
+      const run = await ingestAllActive()
+      refreshed = run.results.length
       didIngest = true
       // publish() is deliberately NOT called here — see step 4.
     }

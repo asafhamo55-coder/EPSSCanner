@@ -109,7 +109,8 @@ export async function GET(req: NextRequest) {
   }
   try {
     const started = Date.now()
-    const results = await ingestAllActive()
+    const run = await ingestAllActive()
+    const results = run.results
     publish()
     const remaining = () => ROUTE_BUDGET_MS - (Date.now() - started)
 
@@ -185,6 +186,11 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       ok: true,
       refreshed: results.length,
+      failed: run.failures.length,
+      // Symbols only: the full error strings go to the log, and a cron
+      // response that balloons with a hundred provider messages is harder to
+      // read at a glance, not easier.
+      failedSymbols: run.failures.map((f) => f.symbol),
       warmed: warm.warmed,
       warmSkipped: warm.skipped,
       prepOk: prep?.ok ?? false,
@@ -217,9 +223,15 @@ export async function POST(req: NextRequest) {
       publish(result.symbol)
       return NextResponse.json({ ok: true, result })
     }
-    const results = await ingestAllActive()
+    const run = await ingestAllActive()
     publish()
-    return NextResponse.json({ ok: true, refreshed: results.length, results })
+    return NextResponse.json({
+      ok: true,
+      refreshed: run.results.length,
+      failed: run.failures.length,
+      failures: run.failures,
+      results: run.results,
+    })
   } catch (e) {
     return NextResponse.json({ ok: false, error: (e as Error).message }, { status: 502 })
   }

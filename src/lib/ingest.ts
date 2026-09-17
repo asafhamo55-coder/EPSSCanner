@@ -19,6 +19,15 @@ function sourceName(): string {
   return process.env.MARKET_DATA_FMP_API_KEY ? 'fmp' : 'yahoo'
 }
 
+/** A ticker that could not be refreshed this run. Surfaced rather than
+ *  swallowed: the whole hazard of making per-ticker failure non-fatal is that
+ *  a partial refresh looks exactly like a complete one, so every caller gets
+ *  told which symbols are stale and why. */
+export interface IngestFailure {
+  symbol: string
+  error: string
+}
+
 export interface IngestResult {
   symbol: string
   tickerId: string
@@ -176,6 +185,13 @@ export async function ingestTicker(symbol: string): Promise<IngestResult> {
 /** Refresh every active (non-deleted) ticker. Used by the Refresh-all button
  *  and the weekly cron. Sequential — the watchlist is tiny and this keeps us
  *  well inside provider rate limits. */
+/** What one full refresh produced: the tickers that succeeded, and the ones
+ *  that did not. */
+export interface IngestRun {
+  results: IngestResult[]
+  failures: IngestFailure[]
+}
+
 /** How many tickers ingest in parallel. Deliberately modest: every worker is
  *  a separate fundamentals-provider round trip, and the provider's rate limit
  *  — not this function — is the binding constraint on raising it. Five is
@@ -187,7 +203,7 @@ export async function ingestTicker(symbol: string): Promise<IngestResult> {
  *  one. */
 const INGEST_CONCURRENCY = 3
 
-export async function ingestAllActive(): Promise<IngestResult[]> {
+export async function ingestAllActive(): Promise<IngestRun> {
   const supabase = db()
   const { data, error } = await supabase
     .from('screener_tickers')
@@ -207,25 +223,41 @@ export async function ingestAllActive(): Promise<IngestResult[]> {
   // preparation phase was added after it. Nothing about the work requires
   // ordering: each ingestTicker upserts its own rows keyed by symbol.
   //
-  // Failure semantics are deliberately unchanged. The sequential loop had no
-  // per-ticker catch, so one throw aborted the whole run and propagated to
-  // the caller; Promise.all does exactly the same. Making individual tickers
-  // non-fatal is a separate decision with its own consequences (a silently
-  // partial refresh looks identical to a complete one) and is not smuggled
-  // in here.
+  // Per-ticker failure is non-fatal, which IS a change from the sequential
+  // loop — that had no catch, so a single provider error aborted the entire
+  // refresh and propagated to the caller. Observed in production: one
+  // `FMP /ratios-ttm → 429` discarded ~100 tickers' worth of work that had
+  // already succeeded. Rate limiting is per-request and transient, and the
+  // right blast radius for it is one symbol, not the whole day.
+  //
+  // The hazard this introduces is that a partial refresh looks identical to
+  // a complete one, so it is deliberately not silent: failures are logged
+  // with their symbols and returned to the caller, which reports them in the
+  // cron's response body.
   //
   // Result ORDER is no longer symbol order. The only consumers are
   // `results.length` and `results.map(r => r.symbol)` for cache warming,
   // neither of which depends on it.
   const results: IngestResult[] = []
+  const failures: IngestFailure[] = []
   let next = 0
   const worker = async () => {
     for (let i = next++; i < symbols.length; i = next++) {
-      results.push(await ingestTicker(symbols[i]))
+      try {
+        results.push(await ingestTicker(symbols[i]))
+      } catch (e) {
+        failures.push({ symbol: symbols[i], error: (e as Error).message })
+      }
     }
   }
   await Promise.all(
     Array.from({ length: Math.min(INGEST_CONCURRENCY, symbols.length) }, worker),
   )
-  return results
+  if (failures.length > 0) {
+    console.error(
+      `[ingest] ${failures.length} of ${symbols.length} ticker(s) failed: ` +
+        failures.map((f) => `${f.symbol} (${f.error})`).join(', '),
+    )
+  }
+  return { results, failures }
 }
