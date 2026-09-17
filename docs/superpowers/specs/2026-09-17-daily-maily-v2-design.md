@@ -264,8 +264,10 @@ Structure:
    S&P 500, Nasdaq and VIX with YTD and P/E from `indices.ts`.
 2. **Market read** — the AI's paragraph, in a distinct panel, labelled as
    generated commentary rather than presented as editorial.
-3. **Greeting** — `Good morning, {first}`, plus subscriber tenure and digest
-   number.
+3. **Greeting** — `Good morning, {first}`. Personalization is the name only:
+   subscriber tenure and a digest number were an embellishment in an earlier
+   draft of this spec, are not derivable from `DigestRecipient`, and were not
+   part of the request. Dropped rather than built.
 4. **Pick cards**, ranked. Each carries:
    - rank, logo, symbol, company name, and the score meter;
    - **the chart image**, full card width, with `alt` text naming the symbol so
