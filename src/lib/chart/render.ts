@@ -32,11 +32,16 @@ export interface ChartInput {
 }
 
 export async function renderChart(input: ChartInput): Promise<Buffer | null> {
-  const { technicals: t } = input
-  const bars = t.visible
-  if (bars.length < 2) return null
-
   try {
+    // Everything is inside the guard, including reading `input` itself. The
+    // whole point of this module is that a chart which cannot be drawn
+    // degrades the email rather than failing the cron that produced it, and a
+    // statement outside the guard is a hole in exactly that promise — however
+    // well-typed the current caller happens to be.
+    const bars = input.technicals?.visible ?? []
+    if (bars.length < 2) return null
+    const t = input.technicals
+
     // Imported lazily so a missing or incompatible native binary fails HERE,
     // where it is caught, rather than at module load — which would take down
     // the whole ingest route rather than just the chart.
@@ -132,7 +137,7 @@ export async function renderChart(input: ChartInput): Promise<Buffer | null> {
 
     return canvas.toBuffer('image/png')
   } catch (e) {
-    console.error(`[chart] render failed for ${input.symbol}: ${(e as Error).message}`)
+    console.error(`[chart] render failed for ${input?.symbol ?? 'unknown'}: ${(e as Error).message}`)
     return null
   }
 }
