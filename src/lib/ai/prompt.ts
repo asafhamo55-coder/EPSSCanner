@@ -128,6 +128,8 @@ Two rules bind everything you write.
 
 First, every figure you mention must appear in the payload. You are interpreting numbers that were given to you, never sourcing new ones. If you do not have a number, write around it — do not estimate, recall, or infer one. A figure you invented would look exactly as authoritative as one we computed, and neither we nor the reader would catch it.
 
+You may name this system's own structural windows and ratios — a 150-day average, a 52-week range, a 21-day (one-month) window, a Fibonacci level such as the 61.8% retracement — without those counting as new figures, since they describe how we compute rather than a claim about the stock; every OTHER number must still trace back to the payload.
+
 Second, describe what the data shows; do not tell anyone what to do. "Trading at the lower channel rail with margins expanding" is a description a trader can act on however they choose. "Buy this" is advice, and it is not yours or ours to give.
 
 Write for someone who reads charts daily: direct, specific, no hedging filler, no exclamation. Reference the actual levels and figures rather than gesturing at them.
@@ -175,6 +177,30 @@ function roundTo(n: number, digits: number): number {
   return Math.round(n * f) / f
 }
 
+/** Window sizes and ratios this system itself defines, not figures about any
+ *  stock. 1/5/21 are the momentum lookback windows in trading days (day/
+ *  week/month — CHANGE_1D_LOOKBACK etc. in digest.ts), 52 is the standard
+ *  "52-week range" phrasing, 126/150/252 are this system's own bar-window
+ *  constants (VISIBLE_BARS, SMA_PERIOD, and the ~252-trading-day year the
+ *  "52-week range" is now actually computed over — see technicals.ts), and
+ *  23.6/38.2/50/61.8/78.6 are the Fibonacci retracement ratios (FIB_LEVELS,
+ *  technicals.ts) written as the percentages a trader would actually use.
+ *
+ *  Without this, the natural way to describe the task's own output —
+ *  "holding above its 150-day average", "near the top of its 52-week
+ *  range" — trips the grounding guard: `numericTokens` reads "150" or "52"
+ *  off the prose, no payload NUMBER happens to equal them, and
+ *  `commentary.ts` drops the whole day's market read plus all ten per-stock
+ *  lines over phrasing, not a fabrication. These are unioned into the
+ *  grounded set unconditionally (the same way `identifyingStrings` admits
+ *  symbols/names below) because they're vocabulary this system defines for
+ *  itself, not a reading about a particular stock. The accepted tradeoff:
+ *  since matching is purely numeric (no context), a genuinely fabricated
+ *  "$150 target" would also now pass — the same documented "coarse net, not
+ *  a fact-checker" limitation `isGrounded`'s own doc comment already names
+ *  for a real number attached to the wrong claim. */
+export const STRUCTURAL_TOKENS = [1, 5, 21, 52, 126, 150, 252, 23.6, 38.2, 50, 61.8, 78.6] as const
+
 /** Every number derivable from the payload's NUMERIC fields only: full
  *  precision, rounded to 1 decimal, rounded to 0 decimals, and the absolute
  *  value of each of those — so a payload value of 12.43 legitimises the
@@ -183,11 +209,14 @@ function roundTo(n: number, digits: number): number {
  *  below the high") without the sign. Digits embedded in strings (an index
  *  name, a symbol, a factor label) are never included here — see
  *  `identifyingStrings` / `stripIdentifyingStrings` for how those are
- *  handled instead. */
+ *  handled instead. STRUCTURAL_TOKENS is unioned in unconditionally, on top
+ *  of whatever the payload itself contains — see its own doc comment for
+ *  why those specific numbers get a pass regardless of this payload's
+ *  actual values. */
 function groundedNumbers(payload: CommentaryPayload): number[] {
   const raw: number[] = []
   collectNumbers(payload, raw)
-  const out: number[] = []
+  const out: number[] = [...STRUCTURAL_TOKENS]
   for (const n of raw) {
     for (const v of [n, Math.abs(n)]) {
       out.push(v, roundTo(v, 1), roundTo(v, 0))

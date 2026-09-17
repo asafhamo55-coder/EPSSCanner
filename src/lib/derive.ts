@@ -64,9 +64,15 @@ export interface PriceRange {
 }
 
 /** High/low across the whole supplied series, with the last close's distance
- *  from each. Callers pass the FULL fetched window (276 bars ≈ 13 months),
- *  not the 126-bar visible one — a "52-week range" computed over six months
- *  would be a different statistic wearing the same label. */
+ *  from each. Callers should pass ~252 bars (one year of trading days), not
+ *  the 126-bar visible window (which would understate the labelled
+ *  "52-week range" by half a year) and not the full ~276-bar fetched window
+ *  either (WARMUP_BARS + VISIBLE_BARS in technicals.ts, which pads roughly
+ *  a month of SMA warmup ahead of the visible window and would overstate it
+ *  by about a month) — a "52-week range" computed over a different span
+ *  would be a different statistic wearing the same label. See
+ *  technicals.ts's `analyze()`, which slices the fetched series to the
+ *  trailing 252 bars before calling this. */
 export function fiftyTwoWeekRange(bars: Bar[]): PriceRange | null {
   if (bars.length === 0) return null
   let high = -Infinity

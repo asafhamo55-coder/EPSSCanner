@@ -432,6 +432,13 @@ export function analyze(bars: Bar[]): Technicals {
     positionPct,
     signals,
     windowBars: visible.length,
-    fullRange: fiftyTwoWeekRange(bars),
+    // 252 ≈ one year of trading days — NOT the full ~276-bar fetch
+    // (FETCH_BARS = WARMUP_BARS + VISIBLE_BARS), which pads roughly a month
+    // of warmup ahead of the visible window. Labelling that full fetch a
+    // "52-week range" would be a ~13-month statistic wearing a 52-week
+    // label — a subscriber comparing against their broker would see a
+    // different number. See fiftyTwoWeekRange's own doc comment in
+    // derive.ts.
+    fullRange: fiftyTwoWeekRange(bars.slice(-252)),
   }
 }

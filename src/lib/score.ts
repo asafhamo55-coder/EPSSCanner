@@ -433,6 +433,15 @@ export interface DigestPickLevels {
    *  "no data yet" (null `levels`) from "computed, but no Fib" (empty array)
    *  and degrade the two independently. */
   fib: Array<{ ratio: number; price: number }>
+  /** `Technicals['fib']['anchor']` (technicals.ts), carried through so the
+   *  email can honour the same contract the dashboard already does
+   *  (`TechnicalChart.tsx` labels a 'window' anchor "window extremes" rather
+   *  than presenting it as a real swing retracement — see that file's own
+   *  Fib heading). Null exactly when `fib` is empty — there is no anchor to
+   *  label when there's no ladder to label it on. Without this, the email
+   *  presented every fallback ladder as a genuine swing retracement, to
+   *  expert traders, under the owner's name. */
+  fibAnchor: 'swing' | 'window' | null
   /** Open gaps nearest the last close, capped at 3 — a name with a dozen
    *  unfilled gaps should not produce a dozen email rows. */
   gaps: Array<{
@@ -466,6 +475,8 @@ export function deriveLevels(technicals: Technicals | null): DigestPickLevels | 
   }
 
   const fibLevels = fib ? fib.levels.map((l) => ({ ratio: l.ratio, price: l.price })) : []
+  // Null exactly when there's no ladder — see the field's own doc comment.
+  const fibAnchor = fib ? fib.anchor : null
 
   const lastClose = visible.length > 0 ? visible[visible.length - 1].c : null
   const nearestGaps = [...gaps]
@@ -478,7 +489,7 @@ export function deriveLevels(technicals: Technicals | null): DigestPickLevels | 
     .slice(0, 3)
     .map((g) => ({ top: g.top, bottom: g.bottom, pct: g.pct, direction: g.direction, side: g.side }))
 
-  return { channelUpper, channelMid, channelLower, sma150, fib: fibLevels, gaps: nearestGaps }
+  return { channelUpper, channelMid, channelLower, sma150, fib: fibLevels, fibAnchor, gaps: nearestGaps }
 }
 
 /** Compact projection of a ScoredPick for persistence (screener_digest_sends.

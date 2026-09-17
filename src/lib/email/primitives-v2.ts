@@ -215,6 +215,15 @@ export function technicalLevels(opts: {
   // (0.5/0.618 — the same band goldenBand highlights below) picked out in
   // goldInk. Empty array (computed, no swing) renders nothing, same as null
   // (never computed) — the renderer doesn't need to tell those apart.
+  //
+  // technicals.ts's own contract (Fib.anchor) requires a 'window' anchor —
+  // no real swing found, levels drawn from the fetched window's plain
+  // high/low as a fallback — be visibly labelled as such (the dashboard
+  // honours this too: TechnicalChart.tsx renders "window extremes" vs "from
+  // detected swing"). Presenting a fallback ladder as a real swing
+  // retracement, unlabelled, to expert traders, under the owner's name, is
+  // exactly the gap this heading closes.
+  const fibHeading = l?.fibAnchor === 'window' ? 'Fib ladder · window extremes' : 'Fib ladder'
   const fibRows = l && l.fib.length
     ? l.fib
         .map((f) => {
@@ -288,7 +297,7 @@ export function technicalLevels(opts: {
     fibRows
       ? `<tr><td style="padding:0 12px 8px 12px;">
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
-        <tr><td colspan="2" style="font:700 10px ${FONT};color:${PALETTE.muted};padding:0 0 3px 0;text-transform:uppercase;letter-spacing:0.04em;">Fib ladder</td></tr>
+        <tr><td colspan="2" style="font:700 10px ${FONT};color:${PALETTE.muted};padding:0 0 3px 0;text-transform:uppercase;letter-spacing:0.04em;">${escapeHtml(fibHeading)}</td></tr>
         ${fibRows}
       </table>
     </td></tr>`

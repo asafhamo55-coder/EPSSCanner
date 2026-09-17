@@ -55,6 +55,7 @@ import { renderDigestV2 } from '../src/lib/email/render-v2'
 import type { PrepPickRecord } from '../src/lib/digest'
 import { PALETTE } from '../src/lib/email/primitives'
 import {
+  deriveLevels,
   evaluate,
   selectPicks,
   toDigestPickRecord,
@@ -535,6 +536,31 @@ async function main() {
   eq(perfectEval.passedGates, true, 'gates: the perfect input passes all five')
   eq(perfectEval.gates.length, 5, 'gates: five gates are reported')
   approx(perfectEval.score, 100, 0.05, 'score: the perfect input scores 100')
+
+  // ── deriveLevels: fibAnchor carries technicals.ts's own contract ───
+  // Fib.anchor ('swing' | 'window') tells the dashboard whether a ladder is
+  // a real swing retracement or a fallback drawn off the window's plain
+  // high/low (TechnicalChart.tsx labels the fallback "window extremes").
+  // deriveLevels must carry that same distinction into the email, not
+  // silently drop it and present every fallback ladder as a real swing.
+  eq(
+    deriveLevels(mkTech(0, 100, { high: 200, low: 0, direction: 'rally', anchor: 'swing', levels: [] }))
+      ?.fibAnchor,
+    'swing',
+    'deriveLevels: fibAnchor carries a real swing anchor through',
+  )
+  eq(
+    deriveLevels(mkTech(0, 100, { high: 200, low: 0, direction: 'rally', anchor: 'window', levels: [] }))
+      ?.fibAnchor,
+    'window',
+    'deriveLevels: fibAnchor carries a window (fallback) anchor through',
+  )
+  eq(
+    deriveLevels(mkTech(0, 100, null))?.fibAnchor,
+    null,
+    'deriveLevels: fibAnchor is null when there is no fib at all (no swing to anchor)',
+  )
+  eq(deriveLevels(null), null, 'deriveLevels: null technicals produces null levels end-to-end')
 
   // Each gate must reject on its own.
   eq(
@@ -1169,6 +1195,83 @@ async function main() {
     numericTokens('up 12.4% from $100 to 109').length,
     3,
     'numericTokens: extracts every numeric token',
+  )
+
+  // ── STRUCTURAL_TOKENS: period/ratio phrasing admitted unconditionally ──
+  // Before this fix, the natural way to describe this system's own output —
+  // "holding above its 150-day average" — tripped the guard: no payload
+  // NUMBER happens to equal 150, so the whole commentary was dropped over
+  // phrasing, not a fabrication.
+  eq(
+    isGrounded('AAA is holding above its 150-day average.', gPayload),
+    true,
+    'grounding: STRUCTURAL_TOKENS admits "150-day" without a matching payload value',
+  )
+  eq(
+    isGrounded('AAA sits near the top of its 52-week range.', gPayload),
+    true,
+    'grounding: STRUCTURAL_TOKENS admits "52-week" the same way',
+  )
+  eq(
+    isGrounded('AAA is pulling back toward the 61.8% retracement.', gPayload),
+    true,
+    'grounding: STRUCTURAL_TOKENS admits a bare Fibonacci ratio like "61.8%"',
+  )
+
+  // Five-claim regression (Task 5's fix round): confirm admitting
+  // STRUCTURAL_TOKENS did NOT resurrect the index-name digit leak that fix
+  // closed. Payload deliberately avoids any coincidental legitimate match —
+  // price is 230.50 (not 100/500/2000/35), and the index roster reproduces
+  // every name whose embedded digits used to leak (Russell 2000, Nasdaq-100,
+  // S&P 500, TA-35).
+  //
+  // One of the reviewer's original five claims ("a breakout target near
+  // $150") is deliberately NOT reproduced here: 150 is now a structural
+  // token, admitted regardless of context (see STRUCTURAL_TOKENS' own doc
+  // comment) — that specific claim now legitimately PASSES, which the
+  // assertion right after this block confirms is the intended tradeoff, not
+  // a regression.
+  const fiveClaimsPick = toPick(evaluate({ ...perfect, price: 230.5 }))
+  const fiveClaimsPayload = buildPayload(
+    [fiveClaimsPick],
+    [
+      { key: 'rut', name: 'Russell 2000', ytdPct: 8.1, trailingPe: 24.6, forwardPe: 19.4 },
+      { key: 'ndx', name: 'Nasdaq-100', ytdPct: 22.3, trailingPe: 31.7, forwardPe: 27.9 },
+      { key: 'sp500', name: 'S&P 500', ytdPct: 12.4, trailingPe: 24.1, forwardPe: 21.0 },
+      { key: 'ta35', name: 'TA-35', ytdPct: 9.6, trailingPe: 14.2, forwardPe: 12.8 },
+    ],
+  )
+  eq(
+    isGrounded('AAA is trading at $100 resistance.', fiveClaimsPayload),
+    false,
+    'grounding (5-claim regression): a fabricated $100 is still rejected',
+  )
+  eq(
+    isGrounded('AAA rallied to $500 today.', fiveClaimsPayload),
+    false,
+    'grounding (5-claim regression): the digits inside "S&P 500" do not leak into a fabricated $500',
+  )
+  eq(
+    isGrounded('AAA moved 2000 basis points intraday.', fiveClaimsPayload),
+    false,
+    'grounding (5-claim regression): the digits inside "Russell 2000" do not leak into a fabricated 2000',
+  )
+  eq(
+    isGrounded('AAA is down 35% from highs.', fiveClaimsPayload),
+    false,
+    'grounding (5-claim regression): the digits inside "TA-35" do not leak into a fabricated 35%',
+  )
+  eq(
+    isGrounded('AAA rallied to $317.25 on heavy volume.', fiveClaimsPayload),
+    false,
+    'grounding (5-claim regression): an invented precise figure is still rejected',
+  )
+  // The documented tradeoff named above: 150 IS admitted regardless of
+  // context, by design, because it's in STRUCTURAL_TOKENS.
+  eq(
+    isGrounded('AAA has a breakout target near $150.', fiveClaimsPayload),
+    true,
+    'grounding: 150 is a structural token (the SMA period) — admitted unconditionally, not a leak',
   )
 
   // ── Derivations: momentum, range, surprise ───────────────────────
