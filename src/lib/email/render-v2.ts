@@ -32,6 +32,7 @@ import type { SignalState } from '@/lib/signals'
 import type { Commentary } from '@/lib/market-read'
 import type { DigestData, DigestPick, DigestSelection, RenderedEmail } from './render'
 import { chip, escapeHtml, FONT, meter, PALETTE, shell, type ChipTone } from './primitives'
+import { compactHtml, FONT_STYLE_BLOCK } from './compact'
 import { commentaryPanel, indexStrip, metricsGrid, technicalLevels, type MetricBlock } from './primitives-v2'
 
 // ─── Duplicated-from-v1 pure helpers (see file banner) ─────────────
@@ -74,6 +75,49 @@ function logoUrl(symbol: string): string {
 function signTone(v: number | null | undefined): 'positive' | 'negative' | 'neutral' {
   if (v == null || !Number.isFinite(v) || v === 0) return 'neutral'
   return v > 0 ? 'positive' : 'negative'
+}
+
+
+/** GMAIL_CLIP_LIMIT is Gmail's hard ceiling: past it the client truncates the
+ *  message and shows "[Message clipped] View entire message". The budget sits
+ *  under it with headroom, because the figure that matters is the size of the
+ *  MIME part after transport encoding, not the raw string measured here. */
+const GMAIL_CLIP_LIMIT = 102_400
+const SIZE_BUDGET = 96_000
+
+const utf8Bytes = (s: string): number => new TextEncoder().encode(s).length
+
+/** The same technical readings as the full card, on one dense line.
+ *
+ *  Used ONLY for picks that would otherwise push the email past Gmail's
+ *  clipping point — and only from the bottom of the ranking upward, so the
+ *  highest-scoring names keep their full panels. On a typical day this never
+ *  runs: five picks render full and land at 82% of the limit.
+ *
+ *  It deliberately keeps every number a reader acts on — score, price,
+ *  distance from the 150-day average, channel position, retracement,
+ *  drawdown — and drops only the Fib ladder and gap table, which are the
+ *  expensive part of the markup and the part a link can carry. */
+function compactCardV2(p: DigestPick, rank: number, siteUrl: string): string {
+  const positionPct = 'positionPct' in p ? p.positionPct : null
+  const retracement = 'retracement' in p ? p.retracement : null
+  const href = `${siteUrl}/ticker/${encodeURIComponent(p.symbol)}`
+  const bits = [
+    p.vsSma150Pct != null ? `${pct(p.vsSma150Pct, 1)} vs SMA-150` : null,
+    positionPct != null ? `${num(positionPct, 0)}% up channel` : null,
+    retracement != null ? `${num(retracement * 100, 1)}% retrace` : null,
+    p.pctFromAth != null ? `${pct(p.pctFromAth, 1)} from high` : null,
+  ].filter((x): x is string => x != null)
+
+  return `<tr><td style="padding:0 0 8px 0;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:${PALETTE.surface};border:1px solid ${PALETTE.line};border-radius:10px;">
+<tr><td style="padding:10px 14px;">
+<span style="font:700 13px ${FONT};color:${PALETTE.ink};">${rank}. ${escapeHtml(p.symbol)}</span>
+<span style="font:400 12px ${FONT};color:${PALETTE.muted};"> &nbsp;${escapeHtml(num(p.score, 0))}/100 &nbsp;·&nbsp; ${escapeHtml(usd(p.price))}</span>
+<div style="font:400 11px ${FONT};color:${PALETTE.body};padding-top:4px;">${escapeHtml(bits.join(' · '))}</div>
+<a href="${escapeHtml(href)}" style="font:700 11px ${FONT};color:${PALETTE.brand};text-decoration:none;">Full levels and chart &rarr;</a>
+</td></tr></table>
+</td></tr>`
 }
 
 // ─── Pick card ──────────────────────────────────────────────────────
@@ -335,15 +379,56 @@ export function renderDigestV2(data: DigestData): RenderedEmail {
   }
 </td></tr>`
 
-  const body =
+  const footerLinks = `You are receiving this because you confirmed your subscription at ${escapeHtml(data.siteUrl)}.<br>
+<a href="${escapeHtml(unsubUrl)}" style="color:${PALETTE.muted};">Unsubscribe</a>`
+
+  /** Everything that turns an assembled body into the bytes actually sent:
+   *  the shell, the hoisted font-family rule, and the compaction pass. The
+   *  size loop below weighs THIS, not the raw body, because compaction
+   *  changes the answer by roughly a quarter. */
+  const finalise = (bodyHtml: string): string =>
+    compactHtml(
+      shell({ title: subject, preheader, bodyHtml, footerLinksHtml: footerLinks }).replace(
+        '</head>',
+        `${FONT_STYLE_BLOCK}</head>`,
+      ),
+    )
+
+  // Full detail for as many picks as fit, compact rows for the rest.
+  //
+  // Measured, not estimated: the assembled document is rendered and weighed,
+  // and if it exceeds SIZE_BUDGET the lowest-ranked pick drops to a compact
+  // row and it is weighed again. Predicting the size arithmetically would
+  // have to model the compaction pass, the commentary, the index strip and
+  // the chart URLs; measuring costs a few string builds and cannot drift
+  // from what is actually sent.
+  //
+  // The loop always terminates: each pass converts one more pick, and it
+  // stops at one full card even if that alone is over budget — a single
+  // oversized pick is a real (if unreachable) state, and silently emitting
+  // zero cards would be worse than emitting one that clips.
+  const buildBody = (fullCount: number): string =>
     brandBar +
     indexRow +
     marketRead +
     greeting +
-    (n === 0 ? emptyState(data.selection) : picks.map((p, i) => cardV2(p, i + 1, data.siteUrl, commentary)).join(''))
+    (n === 0
+      ? emptyState(data.selection)
+      : picks
+          .map((p, i) =>
+            i < fullCount
+              ? cardV2(p, i + 1, data.siteUrl, commentary)
+              : compactCardV2(p, i + 1, data.siteUrl),
+          )
+          .join(''))
 
-  const footerLinks = `You are receiving this because you confirmed your subscription at ${escapeHtml(data.siteUrl)}.<br>
-<a href="${escapeHtml(unsubUrl)}" style="color:${PALETTE.muted};">Unsubscribe</a>`
+  let fullCount = n
+  let body = buildBody(fullCount)
+  while (fullCount > 1 && utf8Bytes(finalise(body)) > SIZE_BUDGET) {
+    fullCount--
+    body = buildBody(fullCount)
+  }
+
 
   const text = [
     `TripleQ Daily Maily — ${data.asOfLabel}`,
@@ -384,7 +469,9 @@ export function renderDigestV2(data: DigestData): RenderedEmail {
 
   return {
     subject,
-    html: shell({ title: subject, preheader, bodyHtml: body, footerLinksHtml: footerLinks }),
+    // compactHtml is applied to v2 only. v1 is what live subscribers receive
+    // and is not in scope for a size problem it does not have (47KB).
+    html: finalise(body),
     text,
   }
 }

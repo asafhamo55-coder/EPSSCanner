@@ -67,9 +67,12 @@ import {
   type ScoreInput,
 } from '../src/lib/score'
 import { buildMarketRead } from '../src/lib/market-read'
+import { compactHtml, FONT_STYLE_BLOCK } from '../src/lib/email/compact'
+import { FONT } from '../src/lib/email/primitives'
 import { resolveTemplateOverride } from '../src/app/api/digest/resolve-template'
 
 let failures = 0
+const utf8 = (s: string) => new TextEncoder().encode(s).length
 
 function approx(actual: number | null, expected: number, tol: number, label: string) {
   if (actual == null || Math.abs(actual - expected) > tol) {
@@ -1349,6 +1352,67 @@ async function main() {
     two!.perStock['HOT'].includes('the upper third of its regression channel'),
     true,
     'per-stock: a high channel position bands to the upper third',
+  )
+
+  // ── Email compaction — must never lose content ───────────────────
+  // v2 measured 114,976 bytes at five picks against Gmail's 102,400 clipping
+  // point. compactHtml is what closes that gap, and the only way it can do
+  // harm is by changing what the reader sees, so that is what these pin.
+  console.log('\nEmail compaction')
+  const sample =
+    `<td style="font:400 11px ${FONT};color:#64748b;padding:2px 0;">SMA-150</td>\n` +
+    `  <td style="font:700 12px ${FONT};color:#0f172a;font-variant-numeric:tabular-nums;">$412.50</td>`
+  const compacted = compactHtml(sample)
+
+  eq(
+    compacted.includes(FONT),
+    false,
+    'compaction: the 90-char font stack is gone from inline styles',
+  )
+  eq(FONT_STYLE_BLOCK.includes(FONT), true, 'compaction: the stack is defined once in the <style> block')
+  eq(
+    compacted.includes('font-weight:400') && compacted.includes('font-size:11px'),
+    true,
+    'compaction: weight and size stay INLINE, so stripping <style> cannot resize the text',
+  )
+  eq(
+    compacted.includes('color:#64748b') && compacted.includes('color:#0f172a'),
+    true,
+    'compaction: colours stay inline for the same reason',
+  )
+  eq(
+    compacted.includes('font-variant-numeric'),
+    false,
+    'compaction: tabular-nums is hoisted — losing it only unaligns digits',
+  )
+  eq(compacted.includes('class="f n"'), true, 'compaction: a tabular element gets both classes, not two attributes')
+
+  // The load-bearing property: every visible character survives.
+  const textOf = (h: string) => h.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim()
+  eq(
+    textOf(compacted).replace(/\s/g, ''),
+    textOf(sample).replace(/\s/g, ''),
+    'compaction: every visible character survives',
+  )
+  eq(
+    compactHtml('<span>A</span>\n<span>B</span>'),
+    '<span>A</span>\n<span>B</span>',
+    'compaction: whitespace between INLINE elements is preserved — collapsing it would read "AB"',
+  )
+  eq(
+    compactHtml('<td>a</td>\n    <td>b</td>').includes('</td><td>'),
+    true,
+    'compaction: whitespace BETWEEN tags collapses',
+  )
+  eq(
+    compactHtml('<td>Room below   the high</td>'),
+    '<td>Room below the high</td>',
+    'compaction: runs inside a text node collapse to one space, never to nothing',
+  )
+  eq(
+    utf8(compacted) < utf8(sample),
+    true,
+    'compaction: the output is actually smaller',
   )
 
   // ── Derivations: momentum, range, surprise ───────────────────────
