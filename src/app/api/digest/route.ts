@@ -4,7 +4,7 @@ import { publish } from '@/lib/publish'
 import { buildSelection, readPrep } from '@/lib/digest'
 import type { ScoredPick, Selection } from '@/lib/score'
 import { toDigestPickRecord } from '@/lib/score'
-import { renderDigest, type DigestData, type DigestSelection } from '@/lib/email/render'
+import { renderDigest, resolveTemplate, type DigestData, type DigestSelection } from '@/lib/email/render'
 import { buildMarketRead, type Commentary } from '@/lib/market-read'
 import { getIndices, type IndexCardData } from '@/market-data/indices'
 import { sendEmails, type EmailMessage } from '@/lib/email/send'
@@ -174,6 +174,7 @@ export async function GET(req: NextRequest) {
       easternDate: today,
       easternHour: easternHour(now),
       inSendWindow: [6, 7].includes(easternHour(now)),
+      template: resolveTemplate(),
       alreadySentToday: already,
       confirmedSubscribers: confirmed,
       picks: 'error' in (selection as object) ? null : (selection as Selection).picks.length,
@@ -435,6 +436,7 @@ export async function GET(req: NextRequest) {
         picks: selection.picks.length,
         chartsFromPrep: usingPrep && prep ? prep.chartCount : 0,
         commentary: commentary != null,
+        template: resolveTemplate(templateOverride),
         recipients: recipients.length,
         sent: report.sent,
         failed: report.failed,

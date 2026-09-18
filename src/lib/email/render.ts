@@ -414,6 +414,19 @@ export function renderDigestV1(data: DigestData): RenderedEmail {
  *  mistyped, or anything else) fails safe to v1 rather than throwing or
  *  falling through to the new template. */
 export function renderDigest(data: DigestData, template?: string): RenderedEmail {
-  const resolved = (template ?? process.env.DIGEST_TEMPLATE ?? 'v1').trim().toLowerCase()
-  return resolved === 'v2' ? renderDigestV2(data) : renderDigestV1(data)
+  return resolveTemplate(template) === 'v2' ? renderDigestV2(data) : renderDigestV1(data)
+}
+
+/** Which template `renderDigest` would actually use, without rendering.
+ *
+ *  Exported so the digest route can REPORT the answer rather than the
+ *  operator inferring it from the email that arrives. Flipping
+ *  DIGEST_TEMPLATE is a change to what every subscriber receives, and
+ *  "did the flag take effect?" should be answerable from a status call, not
+ *  from an inbox. Single source of truth with the line above — the two can
+ *  never disagree about what fails safe. */
+export function resolveTemplate(template?: string): 'v1' | 'v2' {
+  return (template ?? process.env.DIGEST_TEMPLATE ?? 'v1').trim().toLowerCase() === 'v2'
+    ? 'v2'
+    : 'v1'
 }
