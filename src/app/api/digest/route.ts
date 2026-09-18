@@ -43,6 +43,19 @@ import { resolveTemplateOverride } from './resolve-template'
 // ET year-round.
 export const maxDuration = 60
 
+/** Ceiling for the self-refresh below, leaving the rest of `maxDuration` for
+ *  scoring, the index fetch, rendering and the actual send.
+ *
+ *  This route only ingests when the 09:30 cron left the snapshot stale —
+ *  i.e. exactly when that cron struggled — so it is precisely the case where
+ *  an unbounded refresh is most likely to run long. Without a ceiling it
+ *  inherits the flaw /api/ingest already had: one stage with no limit eats
+ *  the function and the platform kills it, and here that costs the day's
+ *  email rather than a preparation row. Sized against measured sends: the
+ *  prepared path completed in 2.3s end to end and the inline path in 7.6s,
+ *  so 30s of headroom after this is generous. */
+const DIGEST_INGEST_BUDGET_MS = 30_000
+
 const TZ = 'America/New_York'
 
 /** The current hour (0–23) in Eastern. */
@@ -198,8 +211,14 @@ export async function GET(req: NextRequest) {
     let refreshed = 0
     let didIngest = false
     if (!(await snapshotIsFresh(today))) {
-      const run = await ingestAllActive()
+      const run = await ingestAllActive(Date.now() + DIGEST_INGEST_BUDGET_MS)
       refreshed = run.results.length
+      if (run.failures.length > 0 || run.skipped.length > 0) {
+        console.warn(
+          `[digest] self-refresh incomplete — ${run.results.length} refreshed, ` +
+            `${run.failures.length} failed, ${run.skipped.length} skipped past the budget`,
+        )
+      }
       didIngest = true
       // publish() is deliberately NOT called here — see step 4.
     }
