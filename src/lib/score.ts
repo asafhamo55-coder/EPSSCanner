@@ -198,6 +198,21 @@ export interface SelectionFunnel {
   droppedByCap: number
   /** How many names had no data at all for at least one gate. */
   incompleteData: number
+  /** The same funnel restricted to names that clear the market-cap gate.
+   *
+   *  This is the actionable view. The $500B rule DEFINES the universe rather
+   *  than filtering within it — it rejects the large majority of the
+   *  watchlist by design, which makes the raw per-gate counts above dominated
+   *  by names that were never candidates. Among mega caps, a rejection for
+   *  missing data is a pick actually lost to data quality. */
+  amongMegaCaps: {
+    count: number
+    gates: GateFunnelRow[]
+    passedAllGates: number
+    /** Mega caps rejected by at least one gate purely for want of data —
+     *  i.e. names that might have qualified had the refresh been complete. */
+    lostToMissingData: number
+  }
   minScore: number
   maxPicks: number
   minMarketCap: number
@@ -241,6 +256,33 @@ export function selectionFunnel(inputs: ScoreInput[]): SelectionFunnel {
     if (anyMissing) incompleteData++
   }
 
+  // Same tally, restricted to the universe the market-cap rule defines.
+  const megaCaps = inputs.filter((i) => isNum(i.marketCap) && i.marketCap >= MIN_MARKET_CAP)
+  const megaRows = new Map<GateKey, GateFunnelRow>()
+  let lostToMissingData = 0
+  for (const input of megaCaps) {
+    let lost = false
+    for (const gate of runGates(input)) {
+      if (gate.key === 'megacap') continue
+      const row = megaRows.get(gate.key) ?? {
+        key: gate.key,
+        label: gate.label,
+        failed: 0,
+        failedMissingData: 0,
+      }
+      const missing = missingFor[gate.key](input)
+      if (!gate.passed) {
+        row.failed++
+        if (missing) {
+          row.failedMissingData++
+          lost = true
+        }
+      }
+      megaRows.set(gate.key, row)
+    }
+    if (lost) lostToMissingData++
+  }
+
   const evaluated = inputs.map(evaluate)
   const passed = evaluated.filter((e) => e.passedGates)
   const above = passed.filter((e) => e.score >= MIN_SCORE)
@@ -248,6 +290,12 @@ export function selectionFunnel(inputs: ScoreInput[]): SelectionFunnel {
   return {
     considered: inputs.length,
     gates: [...rows.values()],
+    amongMegaCaps: {
+      count: megaCaps.length,
+      gates: [...megaRows.values()],
+      passedAllGates: megaCaps.map(evaluate).filter((e) => e.passedGates).length,
+      lostToMissingData,
+    },
     passedAllGates: passed.length,
     belowCutoff: passed.length - above.length,
     picks: Math.min(above.length, MAX_PICKS),

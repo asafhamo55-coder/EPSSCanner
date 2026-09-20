@@ -1250,6 +1250,25 @@ async function main() {
   eq(capRow.failedMissingData, 0, 'funnel: a real $10B reading is not counted as missing')
   eq(fn.incompleteData, 1, 'funnel: one name had a hole in its data')
 
+  // The mega-cap view: the small cap is out of the universe entirely, so its
+  // gates must not appear in these counts.
+  eq(fn.amongMegaCaps.count, 3, 'funnel: the sub-$500B name is outside the mega-cap universe')
+  eq(
+    fn.amongMegaCaps.lostToMissingData,
+    1,
+    'funnel: one mega cap was rejected purely for want of data — a pick actually lost',
+  )
+  eq(
+    fn.amongMegaCaps.gates.some((g) => g.key === 'megacap'),
+    false,
+    'funnel: the market-cap gate is not counted against the universe it defines',
+  )
+  eq(
+    fn.amongMegaCaps.gates.find((g) => g.key === 'yoy')!.failed,
+    2,
+    'funnel: both YoY failures are mega caps',
+  )
+
   // The cap, when it actually binds.
   const overflow = Array.from({ length: MAX_PICKS + 3 }, (_, i) => ({ ...perfect, symbol: `M${i}` }))
   const fnCap = selectionFunnel(overflow)
