@@ -161,6 +161,104 @@ export interface ScoredPick extends Evaluation {
   fullRange?: PriceRange | null
 }
 
+
+// ─── Selection funnel ───────────────────────────────────────────────
+
+export interface GateFunnelRow {
+  key: GateKey
+  label: string
+  /** How many of the considered names this gate rejected. Counts are
+   *  INDEPENDENT, not sequential — one name failing three gates is counted by
+   *  all three — because the useful question is "which criterion is doing the
+   *  filtering", not "which one happened to run first". */
+  failed: number
+  /** Of `failed`, how many were rejected because the reading was ABSENT
+   *  rather than genuinely bad.
+   *
+   *  This is the number worth watching. Every gate above rejects a missing
+   *  value exactly as it rejects a failing one — `isNum(...)` is false either
+   *  way, and `isGreen` additionally rejects state 'na' — so a name whose
+   *  fundamentals did not refresh is indistinguishable, in the output, from a
+   *  name with genuinely negative growth. When a provider rate-limits the
+   *  refresh (observed: FMP 429s skipping ~20 of 62 tickers), the pick list
+   *  silently shrinks and nothing in the email says so. */
+  failedMissingData: number
+}
+
+export interface SelectionFunnel {
+  considered: number
+  gates: GateFunnelRow[]
+  passedAllGates: number
+  /** Passed every gate but scored below MIN_SCORE. */
+  belowCutoff: number
+  /** Cleared the cutoff AND survived the MAX_PICKS cap — what is emailed. */
+  picks: number
+  /** Cleared the cutoff but were dropped by the MAX_PICKS cap. Non-zero here
+   *  means the cap is binding and real candidates are being withheld. */
+  droppedByCap: number
+  /** How many names had no data at all for at least one gate. */
+  incompleteData: number
+  minScore: number
+  maxPicks: number
+  minMarketCap: number
+}
+
+/** Why the pick list is the size it is — computed from the same inputs
+ *  `selectPicks` consumes, so the two cannot disagree.
+ *
+ *  Exists because "only five stocks today" has several possible causes that
+ *  look identical from outside: a genuinely narrow market, a provider that
+ *  did not refresh, or a cap quietly binding. This separates them. */
+export function selectionFunnel(inputs: ScoreInput[]): SelectionFunnel {
+  const missingFor: Record<GateKey, (i: ScoreInput) => boolean> = {
+    megacap: (i) => !isNum(i.marketCap),
+    yoy: (i) => i.yoyState === 'na' || !isNum(i.yoyPct),
+    ntm: (i) => i.ntmState === 'na' || !isNum(i.ntmPct),
+    cagr: (i) => !isNum(i.epsCagr5yr),
+    belowAth: (i) => !isNum(i.price) || !isNum(i.allTimeHigh),
+  }
+
+  const rows = new Map<GateKey, GateFunnelRow>()
+  let incompleteData = 0
+
+  for (const input of inputs) {
+    let anyMissing = false
+    for (const gate of runGates(input)) {
+      const row = rows.get(gate.key) ?? {
+        key: gate.key,
+        label: gate.label,
+        failed: 0,
+        failedMissingData: 0,
+      }
+      const missing = missingFor[gate.key](input)
+      if (missing) anyMissing = true
+      if (!gate.passed) {
+        row.failed++
+        if (missing) row.failedMissingData++
+      }
+      rows.set(gate.key, row)
+    }
+    if (anyMissing) incompleteData++
+  }
+
+  const evaluated = inputs.map(evaluate)
+  const passed = evaluated.filter((e) => e.passedGates)
+  const above = passed.filter((e) => e.score >= MIN_SCORE)
+
+  return {
+    considered: inputs.length,
+    gates: [...rows.values()],
+    passedAllGates: passed.length,
+    belowCutoff: passed.length - above.length,
+    picks: Math.min(above.length, MAX_PICKS),
+    droppedByCap: Math.max(0, above.length - MAX_PICKS),
+    incompleteData,
+    minScore: MIN_SCORE,
+    maxPicks: MAX_PICKS,
+    minMarketCap: MIN_MARKET_CAP,
+  }
+}
+
 export interface Selection {
   picks: ScoredPick[]
   /** How many tickers were fed in. */

@@ -7,11 +7,13 @@ import { epsCagr5yr, epsSurprisePct, priceChangePct } from './derive'
 import { getWatchlist, liveTechnicals, type EpsPoint } from './queries'
 import {
   selectPicks,
+  selectionFunnel,
   toDigestPickRecord,
   type DigestPickRecord,
   type ScoreInput,
   type ScoredPick,
   type Selection,
+  type SelectionFunnel,
 } from './score'
 import { renderChart } from './chart/render'
 import { pruneCharts, uploadChart } from './chart/store'
@@ -54,7 +56,7 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
   return out
 }
 
-export async function buildSelection(): Promise<Selection> {
+async function buildScoreInputs(): Promise<ScoreInput[]> {
   const watchlist = await getWatchlist()
   // getWatchlist() swallows its own Supabase error and returns [] on a read
   // failure — intentional for the dashboard, which should degrade rather than
@@ -77,7 +79,7 @@ export async function buildSelection(): Promise<Selection> {
   //     row, which the send route's own fallback (readPrep returning null →
   //     score inline) already handles.
   if (watchlist.length === 0) {
-    throw new Error('buildSelection: watchlist came back empty — treating as a read failure')
+    throw new Error('buildScoreInputs: watchlist came back empty — treating as a read failure')
   }
   const inputs: ScoreInput[] = await mapLimit(watchlist, TECHNICALS_CONCURRENCY, async (t) => {
     const sc = t.scorecard
@@ -110,7 +112,24 @@ export async function buildSelection(): Promise<Selection> {
       fullRange: tech ? tech.fullRange : null,
     }
   })
-  return selectPicks(inputs)
+  return inputs
+}
+
+export async function buildSelection(): Promise<Selection> {
+  return selectPicks(await buildScoreInputs())
+}
+
+/** Selection plus the funnel that explains its size, from ONE pass over the
+ *  watchlist. Deliberately not two calls: buildSelection is ~172 Supabase
+ *  round-trips plus up to 57 Yahoo calls on a cold cache (see
+ *  getCachedSelection below), and running it twice to answer one question
+ *  would double that for no benefit. */
+export async function buildSelectionWithFunnel(): Promise<{
+  selection: Selection
+  funnel: SelectionFunnel
+}> {
+  const inputs = await buildScoreInputs()
+  return { selection: selectPicks(inputs), funnel: selectionFunnel(inputs) }
 }
 
 /** Cached wrapper for the public, unauthenticated /daily preview page.

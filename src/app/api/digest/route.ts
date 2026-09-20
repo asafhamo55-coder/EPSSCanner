@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { ingestAllActive } from '@/lib/ingest'
 import { publish } from '@/lib/publish'
-import { buildSelection, readPrep } from '@/lib/digest'
+import { buildSelection, buildSelectionWithFunnel, readPrep } from '@/lib/digest'
 import type { ScoredPick, Selection } from '@/lib/score'
 import { toDigestPickRecord } from '@/lib/score'
 import { renderDigest, resolveTemplate, type DigestData, type DigestSelection } from '@/lib/email/render'
@@ -160,14 +160,16 @@ export async function GET(req: NextRequest) {
   // sends. A read-only mode is the fix; remembering to append `?force=1` is
   // not. Placed FIRST so no guard, claim or ingest can run ahead of it.
   if (req.nextUrl.searchParams.get('status') === '1') {
-    const [selection, confirmed, prep] = await Promise.all([
-      buildSelection().catch((e) => ({ error: (e as Error).message })),
+    const [built, confirmed, prep] = await Promise.all([
+      buildSelectionWithFunnel().catch((e) => ({ error: (e as Error).message })),
       listConfirmed().then((s) => s.length).catch(() => null),
       // Read-only, so it can answer "is tomorrow's email going to have
       // charts?" without sending anything. Never throws (see readPrep).
       readPrep(today),
     ])
     const already = await digestSentOn(today).catch(() => null)
+    const failed = 'error' in built
+    const selection = failed ? built : built.selection
     return NextResponse.json({
       ok: true,
       mode: 'status',
@@ -177,9 +179,14 @@ export async function GET(req: NextRequest) {
       template: resolveTemplate(),
       alreadySentToday: already,
       confirmedSubscribers: confirmed,
-      picks: 'error' in (selection as object) ? null : (selection as Selection).picks.length,
-      considered: 'error' in (selection as object) ? null : (selection as Selection).considered,
+      picks: failed ? null : (selection as Selection).picks.length,
+      considered: failed ? null : (selection as Selection).considered,
       wouldSendTo: confirmed,
+      // Why the pick list is the size it is. "Only five today" has several
+      // possible causes that look identical from outside — a genuinely
+      // narrow market, a provider that did not refresh, or a cap binding —
+      // and this separates them. See selectionFunnel in src/lib/score.ts.
+      funnel: failed ? null : built.funnel,
       // What a real send would actually use: the prepared row if one exists
       // for today, or the inline `selection` above as a fallback. See the
       // "prep" vs "inline" path in the send branch below.

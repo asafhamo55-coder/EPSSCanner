@@ -58,6 +58,7 @@ import {
   deriveLevels,
   evaluate,
   selectPicks,
+  selectionFunnel,
   toDigestPickRecord,
   toPick,
   MAX_PICKS,
@@ -1220,6 +1221,40 @@ async function main() {
     undefined,
     'resolveTemplateOverride: neither force nor template set is undefined',
   )
+
+  // ── Selection funnel — why the list is the size it is ───────────
+  console.log('\nSelection funnel')
+  const fPerfect = { ...perfect, symbol: 'GOOD' }
+  // Fails the YoY gate on a REAL negative reading.
+  const fNegative = { ...perfect, symbol: 'NEG', yoyPct: -5, yoyState: 'fail' as const }
+  // Fails the YoY gate because the reading never arrived — the case a
+  // rate-limited provider produces, and the one the count must separate.
+  const fMissing = { ...perfect, symbol: 'GONE', yoyPct: null, yoyState: 'na' as const }
+  const fSmall = { ...perfect, symbol: 'SMALL', marketCap: 10e9 }
+
+  const fn = selectionFunnel([fPerfect, fNegative, fMissing, fSmall])
+  eq(fn.considered, 4, 'funnel: counts everything fed in')
+  eq(fn.passedAllGates, 1, 'funnel: only the clean name clears every gate')
+  eq(fn.picks, 1, 'funnel: one pick survives to the email')
+  eq(fn.droppedByCap, 0, 'funnel: MAX_PICKS is not binding at four candidates')
+
+  const yoyRow = fn.gates.find((g) => g.key === 'yoy')!
+  eq(yoyRow.failed, 2, 'funnel: two names fail the YoY gate')
+  eq(
+    yoyRow.failedMissingData,
+    1,
+    'funnel: exactly one of those failed for ABSENT data, not a bad reading',
+  )
+  const capRow = fn.gates.find((g) => g.key === 'megacap')!
+  eq(capRow.failed, 1, 'funnel: the small cap is rejected by the market-cap gate')
+  eq(capRow.failedMissingData, 0, 'funnel: a real $10B reading is not counted as missing')
+  eq(fn.incompleteData, 1, 'funnel: one name had a hole in its data')
+
+  // The cap, when it actually binds.
+  const overflow = Array.from({ length: MAX_PICKS + 3 }, (_, i) => ({ ...perfect, symbol: `M${i}` }))
+  const fnCap = selectionFunnel(overflow)
+  eq(fnCap.picks, MAX_PICKS, 'funnel: picks never exceed MAX_PICKS')
+  eq(fnCap.droppedByCap, 3, 'funnel: names withheld by the cap are counted, not hidden')
 
   // ── Market read — composed from the picks' own figures ───────────
   // The Claude call these tests used to guard is gone. What replaced it
