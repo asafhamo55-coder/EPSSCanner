@@ -1259,6 +1259,11 @@ async function main() {
     'funnel: one mega cap was rejected purely for want of data — a pick actually lost',
   )
   eq(
+    fn.amongMegaCaps.gates.find((g) => g.key === 'yoy')!.missingSymbols.join(','),
+    'GONE',
+    'funnel: missingSymbols names the actual ticker behind a NO-DATA rejection',
+  )
+  eq(
     fn.amongMegaCaps.gates.some((g) => g.key === 'megacap'),
     false,
     'funnel: the market-cap gate is not counted against the universe it defines',
@@ -1274,6 +1279,28 @@ async function main() {
   const fnCap = selectionFunnel(overflow)
   eq(fnCap.picks, MAX_PICKS, 'funnel: picks never exceed MAX_PICKS')
   eq(fnCap.droppedByCap, 3, 'funnel: names withheld by the cap are counted, not hidden')
+
+  // missingSymbols is diagnostic, not a full audit trail — it must stay
+  // bounded even on a day where every single name in the universe is
+  // missing the same reading, so a bad provider outage can't balloon the
+  // status response.
+  const manyMissing = Array.from({ length: 25 }, (_, i) => ({
+    ...perfect,
+    symbol: `X${i}`,
+    yoyPct: null,
+    yoyState: 'na' as const,
+  }))
+  const fnManyMissing = selectionFunnel(manyMissing)
+  eq(
+    fnManyMissing.gates.find((g) => g.key === 'yoy')!.missingSymbols.length,
+    10,
+    'funnel: missingSymbols caps at 10 even when 25 names are affected',
+  )
+  eq(
+    fnManyMissing.gates.find((g) => g.key === 'yoy')!.failedMissingData,
+    25,
+    'funnel: the COUNT still reports all 25 — only the symbol list is capped',
+  )
 
   // ── Market read — composed from the picks' own figures ───────────
   // The Claude call these tests used to guard is gone. What replaced it

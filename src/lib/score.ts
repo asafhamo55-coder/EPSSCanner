@@ -198,7 +198,14 @@ export interface GateFunnelRow {
    *  refresh (observed: FMP 429s skipping ~20 of 62 tickers), the pick list
    *  silently shrinks and nothing in the email says so. */
   failedMissingData: number
+  /** Symbols behind `failedMissingData`, capped at 10 — enough to identify
+   *  and investigate the actual names without letting a bad day balloon the
+   *  response. The count above is already the authoritative total; this is
+   *  for "which ones", not "how many". */
+  missingSymbols: string[]
 }
+
+const MISSING_SYMBOLS_CAP = 10
 
 export interface SelectionFunnel {
   considered: number
@@ -254,11 +261,15 @@ export function selectionFunnel(inputs: ScoreInput[]): SelectionFunnel {
         label: gate.label,
         failed: 0,
         failedMissingData: 0,
+        missingSymbols: [],
       }
       if (gate.state === 'unknown') anyMissing = true
       if (!gate.passed) {
         row.failed++
-        if (gate.state === 'unknown') row.failedMissingData++
+        if (gate.state === 'unknown') {
+          row.failedMissingData++
+          if (row.missingSymbols.length < MISSING_SYMBOLS_CAP) row.missingSymbols.push(input.symbol)
+        }
       }
       rows.set(gate.key, row)
     }
@@ -278,11 +289,13 @@ export function selectionFunnel(inputs: ScoreInput[]): SelectionFunnel {
         label: gate.label,
         failed: 0,
         failedMissingData: 0,
+        missingSymbols: [],
       }
       if (!gate.passed) {
         row.failed++
         if (gate.state === 'unknown') {
           row.failedMissingData++
+          if (row.missingSymbols.length < MISSING_SYMBOLS_CAP) row.missingSymbols.push(input.symbol)
           lost = true
         }
       }
