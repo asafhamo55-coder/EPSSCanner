@@ -169,6 +169,17 @@ export async function ingestTicker(symbol: string, light = false): Promise<Inges
         .eq('ticker_id', tickerId)
         .eq('as_of', val.asOf)
     }
+
+    // eps_cagr_5yr_est is an additive column (migration 0032). Set it
+    // best-effort and ignore the error if the migration hasn't been applied
+    // yet, so ingest keeps working either way.
+    if (val.epsCagr5yrEst != null) {
+      await supabase
+        .from('screener_valuation_snapshots')
+        .update({ eps_cagr_5yr_est: val.epsCagr5yrEst })
+        .eq('ticker_id', tickerId)
+        .eq('as_of', val.asOf)
+    }
   }
 
   if (annual.length) {

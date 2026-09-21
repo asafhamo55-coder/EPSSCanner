@@ -6,6 +6,7 @@ import type {
 } from '../provider'
 import { ProviderError } from '../provider'
 import { YahooProvider } from './yahoo'
+import { forwardEpsCagr } from '@/lib/derive'
 
 // Financial Modeling Prep (https://financialmodelingprep.com) adapter.
 //
@@ -240,6 +241,7 @@ export class FmpProvider implements DataProvider {
       trailingPe: posPe(yahoo?.trailingPe ?? toNum(r.priceToEarningsRatioTTM)),
       forwardPe: posPe(yahoo?.forwardPe ?? null),
       peg5yr: posPe(yahoo?.peg5yr ?? null),
+      epsCagr5yrEst: null,
       netMarginTtm: toNum(r.netProfitMarginTTM),
       grossMarginTtm: toNum(r.grossProfitMarginTTM),
       operatingMarginTtm: toNum(r.operatingProfitMarginTTM),
@@ -284,12 +286,18 @@ export class FmpProvider implements DataProvider {
     // FMP's analyst-estimate derivation is only a fallback when Yahoo lacks it.
     const forwardPe = posPe(yahoo?.forwardPe ?? fmpForwardPe)
 
+    const epsCagr5yrEst = forwardEpsCagr(
+      estimates.map((e) => ({ date: e.date, eps: e.epsAvg })),
+      t,
+    )
+
     return {
       asOf: t,
       price,
       trailingPe,
       forwardPe,
       peg5yr,
+      epsCagr5yrEst,
       netMarginTtm: toNum(r.netProfitMarginTTM),
       grossMarginTtm: toNum(r.grossProfitMarginTTM),
       operatingMarginTtm: toNum(r.operatingProfitMarginTTM),

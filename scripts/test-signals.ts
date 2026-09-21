@@ -45,6 +45,7 @@ import {
   epsCagr5yr,
   epsSurprisePct,
   fiftyTwoWeekRange,
+  forwardEpsCagr,
   pctFromAth,
   priceChangePct,
   vsSma150Pct,
@@ -485,6 +486,100 @@ async function main() {
   eq(epsCagr5yr(30, 0), null, 'epsCagr5yr: PEG of 0 returns null, not Infinity')
   eq(epsCagr5yr(null, 1.5), null, 'epsCagr5yr: missing P/E returns null')
   eq(epsCagr5yr(30, null), null, 'epsCagr5yr: missing PEG returns null')
+
+  {
+    const ASOF = '2026-01-01'
+    // Mirrors the real INTC shape: 4 future years, base and terminal both
+    // positive, base 1.5 → terminal 6.5 four years later.
+    const intcShaped = [
+      { date: '2027-12-31', eps: 1.5 },
+      { date: '2028-12-31', eps: 2.5 },
+      { date: '2029-12-31', eps: 4.0 },
+      { date: '2031-12-31', eps: 6.5 },
+    ]
+    approx(
+      forwardEpsCagr(intcShaped, ASOF),
+      44.2798,
+      0.01,
+      'forwardEpsCagr: INTC-shaped 4-year span, base 1.5 → terminal 6.5',
+    )
+    approx(
+      forwardEpsCagr(
+        [...intcShaped].reverse(),
+        ASOF,
+      ),
+      44.2798,
+      0.01,
+      'forwardEpsCagr: order-independent — shuffled input matches sorted result',
+    )
+
+    approx(
+      forwardEpsCagr(
+        [
+          { date: '2027-12-31', eps: 1.5 },
+          { date: '2030-12-31', eps: 3.0 },
+        ],
+        ASOF,
+      ),
+      25.9921,
+      0.01,
+      'forwardEpsCagr: exactly MIN_FORWARD_YEARS (3) apart produces a value',
+    )
+
+    eq(
+      forwardEpsCagr(
+        [
+          { date: '2027-12-31', eps: 1.5 },
+          { date: '2029-12-31', eps: 3.0 },
+        ],
+        ASOF,
+      ),
+      null,
+      'forwardEpsCagr: exactly 2 years apart is below the floor, returns null',
+    )
+
+    // Mirrors the real SPCX case: only 1 usable future year after filtering.
+    eq(
+      forwardEpsCagr([{ date: '2027-12-31', eps: 1.5 }], ASOF),
+      null,
+      'forwardEpsCagr: only 1 future year with positive eps returns null',
+    )
+
+    // Mirrors the real SPY (ETF) case: zero analyst-estimate rows at all.
+    eq(forwardEpsCagr([], ASOF), null, 'forwardEpsCagr: zero future rows returns null')
+
+    // A negative-eps year mixed in must be filtered out, not treated as the
+    // base or terminal — same span/result as if it were absent entirely.
+    approx(
+      forwardEpsCagr(
+        [
+          { date: '2027-12-31', eps: 1.5 },
+          { date: '2028-12-31', eps: -0.5 },
+          { date: '2030-12-31', eps: 3.0 },
+        ],
+        ASOF,
+      ),
+      25.9921,
+      0.01,
+      'forwardEpsCagr: negative-eps year is filtered, not used as base/terminal',
+    )
+
+    // A past-dated row must be ignored even though, if wrongly included as the
+    // base, it would still form a valid (longer) span.
+    approx(
+      forwardEpsCagr(
+        [
+          { date: '2022-01-01', eps: 1.0 },
+          { date: '2027-12-31', eps: 1.5 },
+          { date: '2030-12-31', eps: 3.0 },
+        ],
+        ASOF,
+      ),
+      25.9921,
+      0.01,
+      'forwardEpsCagr: past-dated row is ignored, not used as the base year',
+    )
+  }
 
   approx(pctFromAth(80, 100), -20, 1e-9, 'pctFromAth: 80 vs ATH 100 is -20%')
   approx(pctFromAth(100, 100), 0, 1e-9, 'pctFromAth: at the ATH is 0%')

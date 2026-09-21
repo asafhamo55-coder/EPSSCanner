@@ -24,6 +24,11 @@ export interface ValuationSnapshot {
   forwardPe: number | null
   /** PEG ratio (5-yr expected). Trailing P/E ÷ this ≈ expected EPS CAGR %. */
   peg5yr: number | null
+  /** Forward EPS CAGR estimate (%), derived directly from consensus annual
+   *  EPS estimates — see forwardEpsCagr in derive.ts. A SEPARATE estimate
+   *  from peg5yr-derived CAGR, not a replacement: only used as a fallback
+   *  when peg5yr is unavailable (see digest.ts's epsCagr5yr call site). */
+  epsCagr5yrEst: number | null
   netMarginTtm: number | null
   grossMarginTtm: number | null
   operatingMarginTtm: number | null

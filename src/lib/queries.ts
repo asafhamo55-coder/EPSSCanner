@@ -106,6 +106,7 @@ export interface Valuation {
   trailingPe: number | null
   forwardPe: number | null // Yahoo's forward P/E; column + NTM EPS Growth both use it
   peg5yr: number | null
+  epsCagr5yrEst: number | null
   netMarginTtm: number | null
   grossMarginTtm: number | null
   operatingMarginTtm: number | null
@@ -139,6 +140,7 @@ const EMPTY_VALUATION: Valuation = {
   trailingPe: null,
   forwardPe: null,
   peg5yr: null,
+  epsCagr5yrEst: null,
   netMarginTtm: null,
   grossMarginTtm: null,
   operatingMarginTtm: null,
@@ -218,6 +220,7 @@ async function loadFor(tickerId: string) {
         trailingPe: (v.trailing_pe as number | null) ?? null,
         forwardPe: (v.forward_pe as number | null) ?? null,
         peg5yr: (v.peg_5yr as number | null) ?? null,
+        epsCagr5yrEst: (v.eps_cagr_5yr_est as number | null) ?? null,
         netMarginTtm: (v.net_margin_ttm as number | null) ?? null,
         grossMarginTtm: (v.gross_margin_ttm as number | null) ?? null,
         operatingMarginTtm: (v.operating_margin_ttm as number | null) ?? null,

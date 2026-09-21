@@ -24,6 +24,48 @@ export function epsCagr5yr(
   return trailingPe / peg5yr
 }
 
+/** Minimum span, in years, between the nearest and farthest usable future
+ *  estimate before a forward CAGR is trusted. Below this, a single volatile
+ *  consensus jump (observed: one real ticker had only 1 usable year after
+ *  filtering) would be mislabeled as a multi-year trend. */
+const MIN_FORWARD_YEARS = 3
+
+/** Forward EPS CAGR estimate, in percent, derived directly from consensus
+ *  annual EPS estimates — NOT via PEG inversion like `epsCagr5yr` above.
+ *  Used only as a fallback when PEG-based data is unavailable (Yahoo does
+ *  not cover PEG for every name).
+ *
+ *  `estimates` — fiscal year end date ('YYYY-MM-DD') paired with consensus
+ *  EPS for that year, in any order, from any provider (kept generic, no FMP
+ *  type imported here — this file has no provider dependencies and should
+ *  keep it that way).
+ *
+ *  Returns null when: fewer than 2 future years have a POSITIVE eps
+ *  estimate (a loss-making base or terminal year makes a CAGR undefined or
+ *  meaningless — same rule `posPe`/gate logic elsewhere in this codebase
+ *  already applies to P/E), or when the usable span is under
+ *  MIN_FORWARD_YEARS — a real fallback exists, but calling a 1-year
+ *  consensus jump a multi-year trend would be a materially different,
+ *  misleading claim. */
+export function forwardEpsCagr(
+  estimates: Array<{ date: string; eps: number | null | undefined }>,
+  asOf: string,
+): number | null {
+  const future = estimates
+    .filter((e) => e.date > asOf && isNum(e.eps) && e.eps > 0)
+    .sort((a, b) => a.date.localeCompare(b.date))
+  if (future.length < 2) return null
+
+  const base = future[0]
+  const terminal = future[future.length - 1]
+  const baseYear = Number(base.date.slice(0, 4))
+  const terminalYear = Number(terminal.date.slice(0, 4))
+  const years = terminalYear - baseYear
+  if (years < MIN_FORWARD_YEARS) return null
+
+  return (Math.pow((terminal.eps as number) / (base.eps as number), 1 / years) - 1) * 100
+}
+
 /** Percent the current price sits below its all-time high. Zero means the
  *  stock is making new highs; the value is otherwise negative. */
 export function pctFromAth(

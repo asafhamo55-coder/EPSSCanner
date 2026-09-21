@@ -356,6 +356,7 @@ export class YahooProvider implements DataProvider {
       // the API field when earningsTrend is unavailable.
       forwardPe: posPe(forwardPeFromTrend(s.earningsTrend, price) ?? num(sd.forwardPE) ?? num(ks.forwardPE)),
       peg5yr: posPe(num(ks.pegRatio) ?? num(ks.trailingPegRatio)),
+      epsCagr5yrEst: null,
       netMarginTtm: num(fd.profitMargins),
       grossMarginTtm: num(fd.grossMargins),
       operatingMarginTtm: num(fd.operatingMargins),

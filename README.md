@@ -401,6 +401,21 @@ how many are `failedMissingData`, and `amongMegaCaps.lostToMissingData` —
 mega caps that might have qualified had the refresh been complete, as
 opposed to names the $400B rule was always going to exclude.
 
+### EPS CAGR fallback
+
+`epsCagr5yr` ("EPS CAGR 5yr expected") is normally derived from Yahoo's PEG
+ratio (`peg5yr`), but Yahoo has no PEG data for some real mega-cap names, so
+`peg5yr` — and therefore `epsCagr5yr` — is legitimately `null` for them. As a
+fallback, `forwardEpsCagr` (`src/lib/derive.ts`) computes a genuinely
+different estimate directly from FMP's own consensus annual EPS estimates
+(not a proxy for PEG, a separate calculation), and `digest.ts` only reaches
+for it via `?? t.valuation.epsCagr5yrEst` when the PEG-derived value is
+absent. It only activates when the usable forward span is at least 3 years
+(`MIN_FORWARD_YEARS`) — a real observed ticker had only 1 usable future year
+of estimates after filtering, and labeling that a multi-year trend would
+have been misleading, so it correctly yields nothing instead. Requires
+migration `0032_eps_cagr_est.sql`.
+
 ### The `@napi-rs/canvas` build dependency
 
 `next.config.ts` sets `serverExternalPackages: ['@napi-rs/canvas']`. This
