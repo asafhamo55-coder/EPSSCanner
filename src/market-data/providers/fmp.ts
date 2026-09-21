@@ -221,6 +221,33 @@ export class FmpProvider implements DataProvider {
     return [...actuals, ...forecasts]
   }
 
+  /** Two FMP requests instead of four (and no analyst estimates), plus the
+   *  same keyless Yahoo call the full path already makes. Yahoo carries
+   *  trailing P/E, forward P/E and PEG, so the only field this cannot fill
+   *  is roiTtm, which comes from /key-metrics-ttm and is display-only —
+   *  never read by runGates or runFactors. */
+  async getValuationLight(symbol: string): Promise<ValuationSnapshot> {
+    const [ratios, quotes, yahoo] = await Promise.all([
+      get<FmpRatiosTtm[]>(symbol, '/ratios-ttm'),
+      get<FmpQuote[]>(symbol, '/quote'),
+      new YahooProvider().getValuation(symbol).catch(() => null),
+    ])
+    const r = ratios[0] ?? {}
+    const q = quotes[0] ?? {}
+    return {
+      asOf: today(),
+      price: toNum(q.price),
+      trailingPe: posPe(yahoo?.trailingPe ?? toNum(r.priceToEarningsRatioTTM)),
+      forwardPe: posPe(yahoo?.forwardPe ?? null),
+      peg5yr: posPe(yahoo?.peg5yr ?? null),
+      netMarginTtm: toNum(r.netProfitMarginTTM),
+      grossMarginTtm: toNum(r.grossProfitMarginTTM),
+      operatingMarginTtm: toNum(r.operatingProfitMarginTTM),
+      roiTtm: null,
+      marketCap: toNum(q.marketCap),
+    }
+  }
+
   async getValuation(symbol: string): Promise<ValuationSnapshot> {
     const [ratios, metrics, quotes, estimates, yahoo] = await Promise.all([
       get<FmpRatiosTtm[]>(symbol, '/ratios-ttm'),

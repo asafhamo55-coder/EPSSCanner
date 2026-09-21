@@ -1,4 +1,6 @@
 import { getProvider } from '@/market-data'
+import type { AnnualRow, EpsRow, ValuationSnapshot } from '@/market-data/provider'
+import { MIN_MARKET_CAP } from './score'
 import { db } from './db'
 
 // Idempotent ingest for one ticker: pull from the active provider and upsert
@@ -36,7 +38,11 @@ export interface IngestResult {
   asOf: string
 }
 
-export async function ingestTicker(symbol: string): Promise<IngestResult> {
+/** `light` trades completeness for provider requests: two FMP calls plus the
+ *  keyless Yahoo one, instead of seven FMP calls. Used for watchlist names
+ *  whose last known market cap puts them nowhere near the entry gate — see
+ *  ingestAllActive's tiering. */
+export async function ingestTicker(symbol: string, light = false): Promise<IngestResult> {
   const sym = symbol.trim().toUpperCase()
   if (!/^[A-Z][A-Z0-9.\-]{0,9}$/.test(sym)) {
     throw new Error(`Invalid ticker symbol: "${symbol}"`)
@@ -47,18 +53,25 @@ export async function ingestTicker(symbol: string): Promise<IngestResult> {
   const source = sourceName()
   const now = new Date().toISOString()
 
-  const profile = await provider
-    .getProfile(sym)
-    .catch(() => ({ name: null, currency: 'USD' as string | null }))
+  // A company's name and currency do not change, and the row on file already
+  // carries them, so the light path skips this request entirely.
+  const profile = light
+    ? null
+    : await provider
+        .getProfile(sym)
+        .catch(() => ({ name: null, currency: 'USD' as string | null }))
 
   // Upsert the ticker (un-deletes a previously removed symbol).
+  //
+  // `name`/`currency` are omitted entirely on the light path rather than sent
+  // as null: this is an upsert, so writing null would BLANK the name of every
+  // ticker the light path touches — most of the watchlist, every day.
   const { data: ticker, error: tErr } = await supabase
     .from('screener_tickers')
     .upsert(
       {
         symbol: sym,
-        name: profile.name,
-        currency: profile.currency ?? 'USD',
+        ...(profile ? { name: profile.name, currency: profile.currency ?? 'USD' } : {}),
         active: true,
         deleted_at: null,
       },
@@ -69,11 +82,18 @@ export async function ingestTicker(symbol: string): Promise<IngestResult> {
   if (tErr || !ticker) throw new Error(`Failed to upsert ticker ${sym}: ${tErr?.message}`)
   const tickerId = ticker.id as string
 
-  const [epsRaw, val, annualRaw] = await Promise.all([
-    provider.getQuarterlyEps(sym, 12),
-    provider.getValuation(sym),
-    provider.getAnnualFinancials(sym, 5),
-  ])
+  // The light path fetches the valuation alone. EPS history and annual
+  // financials are neither refetched nor overwritten — the rows already on
+  // file simply stand, so nothing is blanked. They age until the name is
+  // promoted back to the full path, which is the correct trade for a company
+  // that cannot currently clear the market-cap gate.
+  const [epsRaw, val, annualRaw]: [EpsRow[], ValuationSnapshot, AnnualRow[]] = light
+    ? [[], await provider.getValuationLight(sym), []]
+    : await Promise.all([
+        provider.getQuarterlyEps(sym, 12),
+        provider.getValuation(sym),
+        provider.getAnnualFinancials(sym, 5),
+      ])
 
   // Collapse rows that map to the same fiscal_period — report-date-derived
   // labels can collide (e.g. two filings in one calendar quarter), and a batch
@@ -182,11 +202,10 @@ export async function ingestTicker(symbol: string): Promise<IngestResult> {
   return { symbol: sym, tickerId, quarters: eps.length, annualYears: annual.length, asOf: val.asOf }
 }
 
-/** Refresh every active (non-deleted) ticker. Used by the Refresh-all button
- *  and the weekly cron. Sequential — the watchlist is tiny and this keeps us
- *  well inside provider rate limits. */
-/** What one full refresh produced: the tickers that succeeded, and the ones
- *  that did not. */
+/** What one refresh produced: the tickers that succeeded, and the ones that
+ *  did not. (The "sequential — the watchlist is tiny" note that used to sit
+ *  here described a loop that was removed once it started timing the cron
+ *  out; see the tiering and concurrency notes below.) */
 export interface IngestRun {
   results: IngestResult[]
   failures: IngestFailure[]
@@ -195,6 +214,8 @@ export interface IngestRun {
    *  matters when reading a cron's output: skipped means "ran out of time",
    *  failed means "the provider said no". */
   skipped: string[]
+  /** How many of `results` took the cheap path — see FULL_REFRESH_FLOOR. */
+  light: number
 }
 
 /** How many tickers ingest in parallel. Deliberately modest: every worker is
@@ -208,16 +229,61 @@ export interface IngestRun {
  *  one. */
 const INGEST_CONCURRENCY = 4
 
+/** Last-known market cap at or above which a ticker earns the full seven-
+ *  request refresh.
+ *
+ *  Set below MIN_MARKET_CAP on purpose. The gate itself is $400B; this floor
+ *  is 10% under it, so a company climbing toward the threshold is already on
+ *  the full path — with complete EPS history and estimates — by the time it
+ *  actually crosses, rather than qualifying on the day and being rejected for
+ *  data nobody fetched. Names below the floor still get their market cap
+ *  refreshed every run, so nothing can hide under it for more than a day. */
+const FULL_REFRESH_FLOOR = MIN_MARKET_CAP * 0.9
+
 export async function ingestAllActive(deadline?: number): Promise<IngestRun> {
   const supabase = db()
   const { data, error } = await supabase
     .from('screener_tickers')
-    .select('symbol')
+    .select('id, symbol')
     .eq('active', true)
     .is('deleted_at', null)
   if (error) throw new Error(`Failed to list active tickers: ${error.message}`)
 
-  const all = ((data ?? []) as { symbol: string }[]).map((r) => r.symbol)
+  const tickers = (data ?? []) as { id: string; symbol: string }[]
+  const all = tickers.map((r) => r.symbol)
+
+  // Decide per ticker how much data to buy for it, from the market cap
+  // already on file.
+  //
+  // The full path is seven provider requests; across ~70 names that is ~490 a
+  // day, which is what exhausted the quota and left mega caps rejected for
+  // want of data. But most of the watchlist can never clear the entry gate —
+  // a $50B company is not crossing $400B overnight — so the expensive half of
+  // those requests bought nothing. Market cap is stable enough day to day to
+  // decide this from yesterday's number.
+  //
+  // ONE query, not one per ticker: screener_latest_valuation is already a
+  // DISTINCT ON (ticker_id) view over the snapshots.
+  const { data: caps } = await supabase
+    .from('screener_latest_valuation')
+    .select('ticker_id, market_cap')
+  const capByTicker = new Map(
+    ((caps ?? []) as { ticker_id: string; market_cap: number | null }[]).map((c) => [
+      c.ticker_id,
+      c.market_cap,
+    ]),
+  )
+  const lightSymbols = new Set(
+    tickers
+      .filter((t) => {
+        const cap = capByTicker.get(t.id)
+        // Unknown cap ⇒ full path. A ticker that has never been ingested has
+        // no basis for the cheap decision, and getting a new symbol wrong is
+        // worse than paying for it once.
+        return cap != null && cap < FULL_REFRESH_FLOOR
+      })
+      .map((t) => t.symbol),
+  )
 
   // Rotate the starting point by the day of the year.
   //
@@ -270,7 +336,7 @@ export async function ingestAllActive(deadline?: number): Promise<IngestRun> {
         continue
       }
       try {
-        results.push(await ingestTicker(symbols[i]))
+        results.push(await ingestTicker(symbols[i], lightSymbols.has(symbols[i])))
       } catch (e) {
         failures.push({ symbol: symbols[i], error: (e as Error).message })
       }
@@ -290,5 +356,11 @@ export async function ingestAllActive(deadline?: number): Promise<IngestRun> {
       `[ingest] deadline hit — refreshed ${results.length}, skipped ${skipped.length} of ${symbols.length}`,
     )
   }
-  return { results, failures, skipped }
+  console.log(
+    `[ingest] ${results.length} refreshed — ${symbols.length - lightSymbols.size} full, ` +
+      `${lightSymbols.size} light (below $${(FULL_REFRESH_FLOOR / 1e9).toFixed(0)}B); ` +
+      `~${(symbols.length - lightSymbols.size) * 7 + lightSymbols.size * 2} provider requests ` +
+      `vs ${symbols.length * 7} before tiering`,
+  )
+  return { results, failures, skipped, light: lightSymbols.size }
 }

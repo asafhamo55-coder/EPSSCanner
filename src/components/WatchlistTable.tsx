@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { ArrowDown, ArrowUp, LineChart, Search, X } from 'lucide-react'
 import { Badge, Button, Card } from '@/ui'
 import { bigUsd, usd } from '@/lib/format'
+import { MIN_MARKET_CAP } from '@/lib/score'
 import type { SignalState } from '@/lib/signals'
 import { SignalChip } from './SignalChip'
 import { RemoveTickerButton } from './RemoveTickerButton'
@@ -129,11 +130,17 @@ function cagrVal(r: WatchlistRow): number {
   return r.epsCagr5yr ?? -Infinity
 }
 
-// Market cap colour bands: < $500B red, $500B-$750B amber, > $750B green.
+// Market cap colour bands, tied to the actual entry gate rather than a
+// second hardcoded figure: red below it (would be rejected), amber in the
+// first 50% of headroom above it, green further clear. This was a bare
+// `500e9` literal, independent of MIN_MARKET_CAP — when the gate moved to
+// $400B, that literal would have kept painting a $420B name red on this
+// table while it was scoring as a genuine pass, which is exactly the kind
+// of silent mismatch a second copy of the same number always risks.
 function marketCapColor(mc: number | null): string {
   if (mc == null) return 'text-muted'
-  if (mc < 500e9) return 'text-red-600'
-  if (mc <= 750e9) return 'text-amber-600'
+  if (mc < MIN_MARKET_CAP) return 'text-red-600'
+  if (mc <= MIN_MARKET_CAP * 1.5) return 'text-amber-600'
   return 'text-emerald-600'
 }
 

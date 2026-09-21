@@ -89,12 +89,12 @@ only `vercel.json`.
 
 Vercel automatically sends `CRON_SECRET` as a Bearer token on both. Nothing
 else to wire — but you must set it: `/api/digest` returns 401 and refuses to
-run without it, because it spends money on a Yahoo fan-out and a real Resend
-send. `/api/ingest` tolerates it being unset for its own core job (re-pulling
-public fundamentals, which costs nothing) — but it also runs preparation for
-the Daily Maily v2 email (chart rendering, a Storage upload, and a paid
-Claude call), and that specific step only runs when `CRON_SECRET` is set, so
-an unauthenticated `/api/ingest` request can never trigger it either.
+run without it, because it spends money on a Yahoo fan-out and a real send
+via Gmail SMTP. `/api/ingest` tolerates it being unset for its own core job
+(re-pulling public fundamentals, which costs nothing) — but it also runs
+preparation for the Daily Maily v2 email (chart rendering and a Storage
+upload), and that specific step only runs when `CRON_SECRET` is set, so an
+unauthenticated `/api/ingest` request can never trigger it either.
 
 > **Note on live data:** FMP's free tier doesn't expose forward P/E, so **Step 5
 > shows N/A** on live data until you add a forward-EPS source or upgrade FMP.
@@ -159,7 +159,7 @@ running, however well it scores elsewhere (`src/lib/score.ts`):
 
 | Gate | Rule |
 |---|---|
-| Market cap | ≥ `MIN_MARKET_CAP` ($500B) |
+| Market cap | ≥ `MIN_MARKET_CAP` ($400B) |
 | YoY EPS growth | positive |
 | NTM EPS growth | positive |
 | EPS CAGR (5yr, expected) | positive |
@@ -230,18 +230,19 @@ list is never exposed to work in progress.
 it back to one cron.** A **Vercel Hobby** plan allows **2 cron jobs** and
 **60 seconds per function**. Both cron slots are already spoken for
 (`/api/ingest` at 09:30 UTC, `/api/digest` at 11:00 UTC), so there is no third
-slot to add. A single Claude call with thinking on can by itself take
-30–60 seconds; stacking chart rendering, a Storage upload and the subscriber
-send fan-out on top of that inside one 60-second function risks a timeout
-*mid-send* — the worst failure this system has, because the day is already
-claimed, some subscribers are mailed, and the rest silently aren't.
+slot to add. Ingesting ~70 tickers, rendering a chart per pick, uploading
+each to Storage and sending to every subscriber does not fit in one
+60-second function without real risk of a timeout *mid-send* — the worst
+failure this system has, because the day is already claimed, some
+subscribers are mailed, and the rest silently aren't.
 
 So the expensive work is pulled out of the send path entirely and moved
 earlier, into the cron that already runs 90 minutes before it:
 
 ```
 09:30 UTC  /api/ingest   ingest → publish → PREPARE (score, render charts,
-                         one Claude call) → persist to screener_digest_prep
+                         compose the market read) → persist to
+                         screener_digest_prep
 11:00 UTC  /api/digest   read today's prepared row → render per-subscriber
                          HTML → send
 ```
@@ -295,6 +296,27 @@ accumulates one row per day, indefinitely, at roughly 10 KB/day (mostly the
 `picks` jsonb column). Small, but the same unbounded-growth class as the
 chart bucket above; nothing prunes it yet.
 
+### Staying under Gmail's clipping limit
+
+Gmail clips a message past 102,400 bytes and shows "[Message clipped] View
+entire message". v2's first real render — five picks, full technical detail
+on each — measured 114,976 bytes and would have arrived clipped.
+
+`src/lib/email/compact.ts` closes that gap without dropping a figure: it
+hoists font-family and tabular-nums into a `<style>` rule (safe — a client
+that strips `<style>` just falls back to its default typeface) and, since
+that alone wasn't enough to keep every scoring pick in full detail rather
+than just the top few, generically hoists any OTHER style string that
+repeats (a broader trade: an element it touches renders unstyled, not
+misleadingly, if `<style>` is stripped — see the file's own doc comments for
+the full reasoning). `renderDigestV2` then assembles the email adaptively:
+full detail for as many picks as measure under a 96,000-byte budget, compact
+rows (score, price, vs-SMA-150, channel position, retracement, drawdown,
+still every number a reader acts on) for whatever doesn't fit — weighing the
+actual finalised document each time, never predicting its size. In practice
+this fits full detail for up to 9 picks; the rare 10-pick day gets 9 full
+and 1 compact rather than risking a clip.
+
 ### The market read
 
 `src/lib/market-read.ts` composes the market-wide paragraph and the
@@ -332,6 +354,52 @@ sentence.
 The read describes what the data shows and never recommends action. The
 app's existing disclaimer — *Fundamental signals only — not investment
 advice* — stays prominent in v2.
+
+### Tiered ingest: not every ticker earns the full refresh
+
+`ingestTicker` makes seven FMP requests per ticker (`/ratios-ttm`,
+`/key-metrics-ttm`, `/quote`, `/analyst-estimates`, `/earnings`,
+`/income-statement`, `/profile`). Across the full watchlist that is ~490
+requests a day, and it exhausted FMP's quota outright — observed in
+production as mega caps rejected on the CAGR gate for **no data**, not a
+genuinely negative reading.
+
+Most of the watchlist can never clear the market-cap gate regardless — a
+$50B company is not crossing $400B overnight — so paying for its analyst
+estimates and five years of income statements every morning bought nothing.
+`ingestAllActive` (`src/lib/ingest.ts`) now tiers the refresh from
+yesterday's own market cap (`screener_latest_valuation`, one query, not one
+per ticker):
+
+- **At or above `FULL_REFRESH_FLOOR`** (90% of `MIN_MARKET_CAP` — a company
+  climbing toward the threshold is on the full path *before* it crosses, not
+  the day it does) — the full seven-request refresh.
+- **Below the floor** — `getValuationLight`: two FMP requests plus the
+  already-free keyless Yahoo call. Enough to keep price, market cap, margins
+  and the P/E family current, and to promote the name back to the full path
+  the day it climbs. EPS history and annual financials are neither
+  refetched nor overwritten on this path — the rows already on file stand.
+- **Unknown cap** (never ingested) — full path. There is no basis for the
+  cheap decision on a brand-new symbol.
+
+The ingest cron's response reports `ingestLight` — how many tickers took the
+cheap path that morning.
+
+### Why a gate can be 'unknown', not just pass/fail
+
+Every gate used to report only `passed: boolean`, and a missing reading
+failed it exactly like a genuinely bad one — `isNum(x)` is false either way.
+A rate-limited provider and a real negative EPS CAGR were therefore
+indistinguishable in the output. `GateResult.state` (`src/lib/score.ts`) is
+now `'pass' | 'fail' | 'unknown'` — `'unknown'` still does not pass a gate
+(a name whose growth cannot be verified has no business in a list of
+recommendations), but it is no longer silently reported as a real rejection.
+
+`selectionFunnel()` uses this to answer "why is the pick list this size?" —
+call `/api/digest?status=1` and read `funnel`: per-gate rejection counts,
+how many are `failedMissingData`, and `amongMegaCaps.lostToMissingData` —
+mega caps that might have qualified had the refresh been complete, as
+opposed to names the $400B rule was always going to exclude.
 
 ### The `@napi-rs/canvas` build dependency
 

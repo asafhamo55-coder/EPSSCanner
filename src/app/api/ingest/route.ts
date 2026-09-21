@@ -206,6 +206,9 @@ export async function GET(req: NextRequest) {
       // read at a glance, not easier.
       failedSymbols: run.failures.map((f) => f.symbol),
       ingestSkipped: run.skipped.length,
+      // How many took the cheap path because their market cap is nowhere near
+      // the entry gate — see FULL_REFRESH_FLOOR in src/lib/ingest.ts.
+      ingestLight: run.light,
       warmed: warm.warmed,
       warmSkipped: warm.skipped,
       prepOk: prep?.ok ?? false,

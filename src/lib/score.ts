@@ -23,7 +23,7 @@ import type { SignalState } from './signals'
 
 // ─── Tuning block — every threshold in the model lives here ─────────
 /** Entry gate: mega caps only. Inclusive. */
-export const MIN_MARKET_CAP = 500e9
+export const MIN_MARKET_CAP = 400e9
 /** A pick must score at least this to be emailed, even if that shortens the list. */
 export const MIN_SCORE = 50
 /** Hard cap on the list length. */
@@ -104,9 +104,24 @@ export interface ScoreInput {
 export type GateKey = 'megacap' | 'yoy' | 'ntm' | 'cagr' | 'belowAth'
 export type FactorKey = 'growth' | 'sma' | 'tunnel' | 'golden' | 'drawdown'
 
+/** Why a gate did not pass.
+ *
+ *  'fail' means the reading arrived and was bad. 'unknown' means it never
+ *  arrived — and before this the two were indistinguishable, because every
+ *  gate rejects a null exactly as it rejects a bad value. A live run showed
+ *  all three EPS-CAGR rejections among mega caps were 'unknown', not one
+ *  genuinely negative reading.
+ *
+ *  'unknown' still does NOT pass. A name whose growth cannot be verified has
+ *  no business in a list of recommendations; the change is that it is now
+ *  reported as unverified rather than silently lumped in with real failures. */
+export type GateState = 'pass' | 'fail' | 'unknown'
+
 export interface GateResult {
   key: GateKey
   label: string
+  state: GateState
+  /** True only for state 'pass'. Kept so existing consumers are unchanged. */
   passed: boolean
   /** Human-readable value that decided it, for the preview and any debug view. */
   detail: string
@@ -225,14 +240,9 @@ export interface SelectionFunnel {
  *  look identical from outside: a genuinely narrow market, a provider that
  *  did not refresh, or a cap quietly binding. This separates them. */
 export function selectionFunnel(inputs: ScoreInput[]): SelectionFunnel {
-  const missingFor: Record<GateKey, (i: ScoreInput) => boolean> = {
-    megacap: (i) => !isNum(i.marketCap),
-    yoy: (i) => i.yoyState === 'na' || !isNum(i.yoyPct),
-    ntm: (i) => i.ntmState === 'na' || !isNum(i.ntmPct),
-    cagr: (i) => !isNum(i.epsCagr5yr),
-    belowAth: (i) => !isNum(i.price) || !isNum(i.allTimeHigh),
-  }
-
+  // Gate state is now authoritative for "was this reading present" — see
+  // GateState. This used to duplicate that judgement per gate, which is
+  // exactly the drift the single helper in runGates prevents.
   const rows = new Map<GateKey, GateFunnelRow>()
   let incompleteData = 0
 
@@ -245,11 +255,10 @@ export function selectionFunnel(inputs: ScoreInput[]): SelectionFunnel {
         failed: 0,
         failedMissingData: 0,
       }
-      const missing = missingFor[gate.key](input)
-      if (missing) anyMissing = true
+      if (gate.state === 'unknown') anyMissing = true
       if (!gate.passed) {
         row.failed++
-        if (missing) row.failedMissingData++
+        if (gate.state === 'unknown') row.failedMissingData++
       }
       rows.set(gate.key, row)
     }
@@ -270,10 +279,9 @@ export function selectionFunnel(inputs: ScoreInput[]): SelectionFunnel {
         failed: 0,
         failedMissingData: 0,
       }
-      const missing = missingFor[gate.key](input)
       if (!gate.passed) {
         row.failed++
-        if (missing) {
+        if (gate.state === 'unknown') {
           row.failedMissingData++
           lost = true
         }
@@ -364,37 +372,50 @@ function isGreen(pct: number | null, state: SignalState): boolean {
 
 export function runGates(input: ScoreInput): GateResult[] {
   const dd = pctFromAth(input.price, input.allTimeHigh)
+  /** A gate's state from "is the reading present" and "is it good". Keeping
+   *  this in one helper is what stops the two questions drifting apart
+   *  gate-by-gate, which is how they became conflated in the first place. */
+  const state = (present: boolean, good: boolean): GateState =>
+    !present ? 'unknown' : good ? 'pass' : 'fail'
+  const row = (key: GateKey, label: string, st: GateState, detail: string): GateResult => ({
+    key,
+    label,
+    state: st,
+    passed: st === 'pass',
+    detail,
+  })
+
   return [
-    {
-      key: 'megacap',
-      label: 'Market cap ≥ $500B',
-      passed: isNum(input.marketCap) && input.marketCap >= MIN_MARKET_CAP,
-      detail: isNum(input.marketCap) ? `$${(input.marketCap / 1e9).toFixed(0)}B` : 'unknown',
-    },
-    {
-      key: 'yoy',
-      label: 'YoY EPS growth positive',
-      passed: isGreen(input.yoyPct, input.yoyState),
-      detail: fmtPct(input.yoyPct),
-    },
-    {
-      key: 'ntm',
-      label: 'NTM EPS growth positive',
-      passed: isGreen(input.ntmPct, input.ntmState),
-      detail: fmtPct(input.ntmPct),
-    },
-    {
-      key: 'cagr',
-      label: 'EPS CAGR 5yr expected positive',
-      passed: isNum(input.epsCagr5yr) && input.epsCagr5yr > 0,
-      detail: fmtPct(input.epsCagr5yr),
-    },
-    {
-      key: 'belowAth',
-      label: 'Trading below the all-time high',
-      passed: isNum(dd) && dd < 0,
-      detail: isNum(dd) ? `${dd.toFixed(1)}% from high` : 'unknown',
-    },
+    row(
+      'megacap',
+      `Market cap ≥ $${(MIN_MARKET_CAP / 1e9).toFixed(0)}B`,
+      state(isNum(input.marketCap), isNum(input.marketCap) && input.marketCap >= MIN_MARKET_CAP),
+      isNum(input.marketCap) ? `$${(input.marketCap / 1e9).toFixed(0)}B` : 'unknown',
+    ),
+    row(
+      'yoy',
+      'YoY EPS growth positive',
+      state(input.yoyState !== 'na' && isNum(input.yoyPct), isGreen(input.yoyPct, input.yoyState)),
+      fmtPct(input.yoyPct),
+    ),
+    row(
+      'ntm',
+      'NTM EPS growth positive',
+      state(input.ntmState !== 'na' && isNum(input.ntmPct), isGreen(input.ntmPct, input.ntmState)),
+      fmtPct(input.ntmPct),
+    ),
+    row(
+      'cagr',
+      'EPS CAGR 5yr expected positive',
+      state(isNum(input.epsCagr5yr), isNum(input.epsCagr5yr) && input.epsCagr5yr > 0),
+      fmtPct(input.epsCagr5yr),
+    ),
+    row(
+      'belowAth',
+      'Trading below the all-time high',
+      state(isNum(dd), isNum(dd) && dd < 0),
+      isNum(dd) ? `${dd.toFixed(1)}% from high` : 'unknown',
+    ),
   ]
 }
 

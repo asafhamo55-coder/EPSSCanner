@@ -53,6 +53,18 @@ export interface DataProvider {
   /** `quarters` actual quarters + however many estimate quarters the provider returns. */
   getQuarterlyEps(symbol: string, quarters: number): Promise<EpsRow[]>
   getValuation(symbol: string): Promise<ValuationSnapshot>
+  /** Cheap refresh for names that are not scoring candidates.
+   *
+   *  Same shape as getValuation, but built from the fewest provider requests
+   *  that keep a watchlist row whole: price, market cap, margins, and the
+   *  P/E family. Skips whatever only matters for SCORING a candidate.
+   *
+   *  Exists because the full path costs seven provider requests per ticker
+   *  and most of the watchlist can never clear the market-cap gate — a
+   *  ~$50B name is not crossing $400B overnight, so paying for its analyst
+   *  estimates and five years of income statements every morning is waste
+   *  that was exhausting the daily quota. */
+  getValuationLight(symbol: string): Promise<ValuationSnapshot>
   getAnnualFinancials(symbol: string, years: number): Promise<AnnualRow[]>
 }
 

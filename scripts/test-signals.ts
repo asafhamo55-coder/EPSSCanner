@@ -1432,7 +1432,11 @@ async function main() {
   eq(
     compacted.includes('color:#64748b') && compacted.includes('color:#0f172a'),
     true,
-    'compaction: colours stay inline for the same reason',
+    // On THIS two-line sample every remaining style is distinct, so the
+    // generic hoist below has nothing to merge and colours stay inline —
+    // this does not claim colours are always inline; see the repeated-style
+    // tests below for what happens when they genuinely repeat.
+    'compaction: colours stay inline when nothing repeats',
   )
   eq(
     compacted.includes('font-variant-numeric'),
@@ -1442,7 +1446,16 @@ async function main() {
   eq(compacted.includes('class="f n"'), true, 'compaction: a tabular element gets both classes, not two attributes')
 
   // The load-bearing property: every visible character survives.
-  const textOf = (h: string) => h.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim()
+  // Strips <style>...</style> WHOLESALE, tag and CSS content together, before
+  // stripping remaining tags — CSS inside a style block is never rendered as
+  // visible text by any client, so leaving it in would make hoisted rules
+  // look like a content change when nothing visible moved.
+  const textOf = (h: string) =>
+    h
+      .replace(/<style[^>]*>.*?<\/style>/gis, '')
+      .replace(/<[^>]*>/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
   eq(
     textOf(compacted).replace(/\s/g, ''),
     textOf(sample).replace(/\s/g, ''),
@@ -1463,6 +1476,79 @@ async function main() {
     '<td>Room below the high</td>',
     'compaction: runs inside a text node collapse to one space, never to nothing',
   )
+  // ── Generic style hoisting — the pass that makes 10 full cards fit ─
+  // Everything above tests the font/tabular hoist, which deliberately
+  // stops short of hoisting colour and layout so a client that strips
+  // <style> still renders correctly. Fitting every scoring pick in full
+  // detail (not just the top 5) needed more than that split gave up —
+  // these tests are for the broader, generic pass this requirement added.
+  const repeatedStyle = 'color:#dc2626;padding:2px 0'
+  const repeated = Array.from(
+    { length: 3 },
+    (_, i) => `<td style="${repeatedStyle}">row ${i}</td>`,
+  ).join('')
+  const hoisted = compactHtml(repeated)
+  eq(
+    hoisted.includes(`style="${repeatedStyle}"`),
+    false,
+    'generic hoist: a style repeated 3 times is no longer an inline attribute on any element',
+  )
+  eq(
+    (hoisted.match(/<style>.*<\/style>/s) || [''])[0].includes(repeatedStyle),
+    true,
+    'generic hoist: the repeated style is emitted exactly once, in the <style> block',
+  )
+  eq(
+    textOf(hoisted).replace(/\s/g, ''),
+    textOf(repeated).replace(/\s/g, ''),
+    'generic hoist: every visible character survives',
+  )
+  eq(
+    utf8(hoisted) < utf8(repeated),
+    true,
+    'generic hoist: the output is smaller once a style actually repeats',
+  )
+
+  // A style seen exactly once must NOT be hoisted — one occurrence can only
+  // ever cost more bytes as a class (`class="hN"` plus the rule) than it
+  // does inline, so hoisting it would make the document bigger for nothing.
+  const singleton = '<td style="color:#0f172a;padding:1px 0">lone</td>'
+  eq(
+    compactHtml(singleton).includes('color:#0f172a;padding:1px 0'),
+    true,
+    'generic hoist: a style seen once stays inline — hoisting it would only cost bytes',
+  )
+
+  // Reserved-class collision: FONT_CLASS ('f') and NUM_CLASS ('n') are each
+  // a single letter that also falls inside the generic hoist's own base-36
+  // counter (n=15 → 'f', n=23 → 'n'). Enough distinct repeated styles must
+  // not let the counter collide with either reserved class and silently
+  // merge an unrelated style into the font-family or tabular-nums rule.
+  const manyStyles = Array.from({ length: 30 }, (_, i) =>
+    Array.from({ length: 2 }, (_, j) => `<td style="padding:${i}px ${j}px">x</td>`).join(''),
+  ).join('')
+  const manyHoisted = compactHtml(manyStyles)
+  // None of this fragment's styles are font-shorthand or tabular-nums, so no
+  // class named bare 'f' or 'n' should appear anywhere — if the base-36
+  // counter collided with a reserved name, this content would produce a
+  // spurious `.f{...}` or `.n{...}` rule (or a `class="f"` reference) that
+  // has nothing to do with font-family or tabular-nums.
+  eq(
+    /\.f\{|class="f"|class="[^"]*\bf\b[^"]*"/.test(manyHoisted),
+    false,
+    'generic hoist: 30 distinct styles never produce a bare "f" class — no collision with FONT_CLASS',
+  )
+  eq(
+    /\.n\{|class="n"|class="[^"]*\bn\b[^"]*"/.test(manyHoisted),
+    false,
+    'generic hoist: 30 distinct styles never produce a bare "n" class — no collision with NUM_CLASS',
+  )
+  eq(
+    textOf(manyHoisted).replace(/\s/g, ''),
+    textOf(manyStyles).replace(/\s/g, ''),
+    'generic hoist: content survives even with 30 distinct repeated styles in play',
+  )
+
   eq(
     utf8(compacted) < utf8(sample),
     true,

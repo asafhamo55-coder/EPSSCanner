@@ -327,6 +327,14 @@ export class YahooProvider implements DataProvider {
     return [...actuals, ...forecasts.filter((f) => !actualPeriods.has(f.fiscalPeriod)).slice(0, 2)]
   }
 
+  /** No cheaper path worth having: this provider is keyless and free, so
+   *  there is no request quota for the light path to conserve. Delegating
+   *  keeps one implementation of the mapping rather than two that can
+   *  drift. */
+  async getValuationLight(symbol: string): Promise<ValuationSnapshot> {
+    return this.getValuation(symbol)
+  }
+
   async getValuation(symbol: string): Promise<ValuationSnapshot> {
     const s = await fetchSummary(symbol)
     const p = s.price ?? {}
