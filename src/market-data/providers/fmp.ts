@@ -286,8 +286,13 @@ export class FmpProvider implements DataProvider {
     // FMP's analyst-estimate derivation is only a fallback when Yahoo lacks it.
     const forwardPe = posPe(yahoo?.forwardPe ?? fmpForwardPe)
 
+    // toNum, not raw e.epsAvg: FMP returns numerics as strings on this exact
+    // field in some responses — the same reason forwardEps a few lines above
+    // (also read from `estimates`) already wraps it in toNum. Without this,
+    // a string epsAvg makes isNum() false in forwardEpsCagr and the fallback
+    // silently returns null forever, with nothing anywhere reporting why.
     const epsCagr5yrEst = forwardEpsCagr(
-      estimates.map((e) => ({ date: e.date, eps: e.epsAvg })),
+      estimates.map((e) => ({ date: e.date, eps: toNum(e.epsAvg) })),
       t,
     )
 

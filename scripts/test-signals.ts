@@ -43,6 +43,7 @@ import type { Bar } from '../src/market-data/provider'
 import type { Fib, Technicals } from '../src/lib/technicals'
 import {
   epsCagr5yr,
+  epsCagr5yrWithFallback,
   epsSurprisePct,
   fiftyTwoWeekRange,
   forwardEpsCagr,
@@ -579,7 +580,69 @@ async function main() {
       0.01,
       'forwardEpsCagr: past-dated row is ignored, not used as the base year',
     )
+
+    // Regression: a duplicate fiscal-year date used to make the result
+    // depend on which duplicate happened to sort first, which depended on
+    // INPUT ORDER — the exact thing the "order-independent" test above was
+    // supposed to rule out, but didn't cover because it had no duplicates.
+    // FMP revising a fiscal year's consensus is the realistic producer.
+    // Duplicates are averaged: (3.0 + 9.0) / 2 = 6.0 as the terminal value.
+    const withDuplicate = [
+      { date: '2027-12-31', eps: 1.5 },
+      { date: '2030-12-31', eps: 3.0 },
+      { date: '2030-12-31', eps: 9.0 }, // a later revision of the same FY
+    ]
+    approx(
+      forwardEpsCagr(withDuplicate, ASOF),
+      58.7401,
+      0.01,
+      'forwardEpsCagr: a duplicate date is averaged into the terminal value',
+    )
+    eq(
+      forwardEpsCagr(withDuplicate, ASOF),
+      forwardEpsCagr([...withDuplicate].reverse(), ASOF),
+      'forwardEpsCagr: a duplicate-date result no longer depends on input order',
+    )
+
+    // Regression: a malformed date (not starting with 4 digits) used to
+    // make `years` NaN, which fails the `< MIN_FORWARD_YEARS` guard OPEN
+    // (NaN < 3 is false) and returned NaN — violating the function's own
+    // `number | null` return type.
+    eq(
+      forwardEpsCagr(
+        [
+          { date: 'not-a-date', eps: 1.5 },
+          { date: '2030-12-31', eps: 3.0 },
+        ],
+        ASOF,
+      ),
+      null,
+      'forwardEpsCagr: a malformed date degrades to null, never NaN',
+    )
   }
+
+  // ── epsCagr5yrWithFallback — the one call site both page.tsx and
+  // digest.ts share, so they cannot disagree about a ticker's CAGR ───
+  eq(
+    epsCagr5yrWithFallback(30, 1.5, 999),
+    20,
+    'epsCagr5yrWithFallback: PEG-derived value wins when present, fallback ignored',
+  )
+  eq(
+    epsCagr5yrWithFallback(30, null, 44.2798),
+    44.2798,
+    'epsCagr5yrWithFallback: falls back to the forward estimate when PEG is absent',
+  )
+  eq(
+    epsCagr5yrWithFallback(30, null, null),
+    null,
+    'epsCagr5yrWithFallback: null when neither source has a value',
+  )
+  eq(
+    epsCagr5yrWithFallback(null, null, 0),
+    0,
+    'epsCagr5yrWithFallback: a genuine 0 from the fallback is not swallowed',
+  )
 
   approx(pctFromAth(80, 100), -20, 1e-9, 'pctFromAth: 80 vs ATH 100 is -20%')
   approx(pctFromAth(100, 100), 0, 1e-9, 'pctFromAth: at the ATH is 0%')

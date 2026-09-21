@@ -3,7 +3,7 @@
 // page cannot rank different stocks.
 
 import { unstable_cache } from 'next/cache'
-import { epsCagr5yr, epsSurprisePct, priceChangePct } from './derive'
+import { epsCagr5yrWithFallback, epsSurprisePct, priceChangePct } from './derive'
 import { getWatchlist, liveTechnicals, type EpsPoint } from './queries'
 import {
   selectPicks,
@@ -96,12 +96,12 @@ async function buildScoreInputs(): Promise<ScoreInput[]> {
       yoyState: sc.yoy.state,
       ntmPct: sc.fwd.pct,
       ntmState: sc.fwd.state,
-      // PEG-derived CAGR is preferred when available — it reflects the market's
-      // own embedded growth assumption via the stock's actual PEG ratio. The
-      // forward-estimate fallback (t.valuation.epsCagr5yrEst, computed at ingest
-      // time from FMP's consensus annual EPS — see forwardEpsCagr in derive.ts)
-      // only applies when Yahoo has no PEG data for this name at all.
-      epsCagr5yr: epsCagr5yr(sc.pe.trailingPe, t.valuation.peg5yr) ?? t.valuation.epsCagr5yrEst,
+      // epsCagr5yrWithFallback (derive.ts): PEG-derived CAGR when Yahoo has
+      // it, else the forward-estimate fallback computed at ingest time from
+      // FMP's consensus annual EPS. src/app/page.tsx calls the SAME helper —
+      // do not inline the `??` here again, that's the drift this helper
+      // exists to prevent (see its own doc comment).
+      epsCagr5yr: epsCagr5yrWithFallback(sc.pe.trailingPe, t.valuation.peg5yr, t.valuation.epsCagr5yrEst),
       technicals: tech,
       // ── Carried context — see ScoreInput; never read by runGates/runFactors ──
       forwardPe: sc.fwd.forwardPe,

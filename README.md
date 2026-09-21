@@ -408,13 +408,37 @@ ratio (`peg5yr`), but Yahoo has no PEG data for some real mega-cap names, so
 `peg5yr` — and therefore `epsCagr5yr` — is legitimately `null` for them. As a
 fallback, `forwardEpsCagr` (`src/lib/derive.ts`) computes a genuinely
 different estimate directly from FMP's own consensus annual EPS estimates
-(not a proxy for PEG, a separate calculation), and `digest.ts` only reaches
-for it via `?? t.valuation.epsCagr5yrEst` when the PEG-derived value is
-absent. It only activates when the usable forward span is at least 3 years
-(`MIN_FORWARD_YEARS`) — a real observed ticker had only 1 usable future year
-of estimates after filtering, and labeling that a multi-year trend would
-have been misleading, so it correctly yields nothing instead. Requires
-migration `0032_eps_cagr_est.sql`.
+(not a proxy for PEG, a separate calculation). It only activates when the
+usable forward span is at least 3 years (`MIN_FORWARD_YEARS`) — a real
+observed ticker had only 1 usable future year of estimates after filtering,
+and labeling that a multi-year trend would have been misleading, so it
+correctly yields nothing instead. Requires migration
+`0032_eps_cagr_est.sql`.
+
+**Only FMP's full-refresh path populates it.** `getValuationLight` (the
+cheap tier tiered ingest uses for names nowhere near the market-cap gate —
+see Tiered ingest above) doesn't fetch `/analyst-estimates` at all, and
+Yahoo and the mock provider both hardcode `epsCagr5yrEst: null` — they have
+no equivalent data. A ticker on the light path, or refreshed via
+`MARKET_DATA_PROVIDER=yahoo`/`mock`, simply never gets this fallback; only
+the PEG-based value can fill it there.
+
+**Every surface reads the same decision.** `epsCagr5yrWithFallback`
+(`derive.ts`) is the one place `epsCagr5yr(...) ?? epsCagr5yrEst` is
+computed — `src/lib/digest.ts` and `src/app/page.tsx` both call it rather
+than each inlining the `??` themselves, specifically so the dashboard table
+and the daily email can't show a different CAGR for the identical ticker
+(they did, briefly, in an earlier version of this fallback — see git
+history if curious).
+
+**It shares the same 0–30%-credit growth scale as the PEG-based value**
+(`score.ts`'s `growthUnit`, full credit at `GROWTH_FULL_PCT`), despite being
+a different calculation with a different typical range — a recovery-off-a-
+depressed-base name (real example: base EPS 1.5 → terminal 6.5 over 4
+years) computes to ~44% and clamps to full credit, while a typical
+PEG-derived mega cap earns roughly half credit. Both are labeled identically
+everywhere they appear. This is a known, accepted trade-off, not an
+oversight — worth revisiting only if it visibly skews rankings in practice.
 
 ### The `@napi-rs/canvas` build dependency
 

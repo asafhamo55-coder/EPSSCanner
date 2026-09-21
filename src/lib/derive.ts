@@ -51,8 +51,28 @@ export function forwardEpsCagr(
   estimates: Array<{ date: string; eps: number | null | undefined }>,
   asOf: string,
 ): number | null {
-  const future = estimates
-    .filter((e) => e.date > asOf && isNum(e.eps) && e.eps > 0)
+  // Dedupe by date BEFORE sorting, averaging any duplicates.
+  //
+  // FMP can revise a fiscal year's consensus, producing two rows for the
+  // same date — and there is no revision timestamp in this shape to prefer
+  // one over the other by any principled rule. "Keep whichever one appears
+  // last in the input" was tried first and rejected: that is STILL
+  // order-dependent for the exact rows that collide, which a test caught by
+  // reversing an array containing a duplicate and getting a different
+  // answer. Averaging is genuinely order-independent — sum and count of a
+  // multiset don't depend on which order its elements were seen in — and it
+  // dampens one stale or erroneous duplicate rather than being swayed
+  // entirely by whichever row happened to be seen last.
+  const byDate = new Map<string, number[]>()
+  for (const e of estimates) {
+    if (e.date > asOf && isNum(e.eps) && e.eps > 0) {
+      const vals = byDate.get(e.date) ?? []
+      vals.push(e.eps)
+      byDate.set(e.date, vals)
+    }
+  }
+  const future = [...byDate.entries()]
+    .map(([date, vals]) => ({ date, eps: vals.reduce((a, b) => a + b, 0) / vals.length }))
     .sort((a, b) => a.date.localeCompare(b.date))
   if (future.length < 2) return null
 
@@ -61,9 +81,32 @@ export function forwardEpsCagr(
   const baseYear = Number(base.date.slice(0, 4))
   const terminalYear = Number(terminal.date.slice(0, 4))
   const years = terminalYear - baseYear
-  if (years < MIN_FORWARD_YEARS) return null
+  // Number(date.slice(0,4)) silently returns NaN for a date string that
+  // doesn't start with 4 digits — a caller violating the documented
+  // 'YYYY-MM-DD' contract, but violating it should degrade to null, not
+  // fail the years<MIN_FORWARD_YEARS guard OPEN (NaN < 3 is false) and
+  // produce Math.pow(x, 1/NaN) = NaN, a value that is not a number this
+  // function's own return type claims to allow.
+  if (!Number.isFinite(years) || years < MIN_FORWARD_YEARS) return null
 
-  return (Math.pow((terminal.eps as number) / (base.eps as number), 1 / years) - 1) * 100
+  return (Math.pow(terminal.eps / base.eps, 1 / years) - 1) * 100
+}
+
+/** `epsCagr5yr` widened with the forward-estimate fallback, in one place so
+ *  the dashboard table, the digest email and any future consumer read this
+ *  decision identically. Before this existed, `src/app/page.tsx` and
+ *  `src/lib/digest.ts` each called `epsCagr5yr` directly and only the
+ *  latter was updated to add `?? epsCagr5yrEst` — the exact kind of drift
+ *  this file's own header comment says it exists to prevent: a mega cap
+ *  with no Yahoo PEG data would score and email with a real CAGR (fallback
+ *  applied) while the dashboard showed it as N/A (fallback missing) for the
+ *  identical underlying number. */
+export function epsCagr5yrWithFallback(
+  trailingPe: number | null | undefined,
+  peg5yr: number | null | undefined,
+  epsCagr5yrEst: number | null | undefined,
+): number | null {
+  return epsCagr5yr(trailingPe, peg5yr) ?? epsCagr5yrEst ?? null
 }
 
 /** Percent the current price sits below its all-time high. Zero means the

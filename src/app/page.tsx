@@ -4,7 +4,7 @@ import { LineChart, Plus } from 'lucide-react'
 import { Button, EmptyState, PageHeader } from '@/ui'
 import { getWatchlist, type TickerData } from '@/lib/queries'
 import { pct } from '@/lib/format'
-import { epsCagr5yr as deriveEpsCagr5yr, pctFromAth as derivePctFromAth } from '@/lib/derive'
+import { epsCagr5yrWithFallback, pctFromAth as derivePctFromAth } from '@/lib/derive'
 import { AddTickerForm } from '@/components/AddTickerForm'
 import { RefreshButton } from '@/components/RefreshButton'
 import { WatchlistTable, type WatchlistRow } from '@/components/WatchlistTable'
@@ -24,9 +24,12 @@ function capitalize(s: string): string {
 
 function toRow(t: TickerData): WatchlistRow {
   const sc = t.scorecard
-  // EPS CAGR (5-yr expected) = trailing P/E ÷ PEG ratio (5-yr expected).
+  // EPS CAGR (5-yr expected) = trailing P/E ÷ PEG ratio (5-yr expected),
+  // falling back to a forward-estimate CAGR when Yahoo has no PEG for this
+  // name — same helper src/lib/digest.ts uses, so this table and the daily
+  // email can't disagree about what a ticker's CAGR is.
   const peg5yr = t.valuation.peg5yr
-  const epsCagr5yr = deriveEpsCagr5yr(sc.pe.trailingPe, peg5yr)
+  const epsCagr5yr = epsCagr5yrWithFallback(sc.pe.trailingPe, peg5yr, t.valuation.epsCagr5yrEst)
   const yoyLabel =
     sc.yoy.state === 'turnaround' ? 'Turnaround' : sc.yoy.state === 'na' ? 'N/A' : pct(sc.yoy.pct)
   const qoqLabel = sc.qoq.label === 'na' ? 'N/A' : capitalize(sc.qoq.label)
