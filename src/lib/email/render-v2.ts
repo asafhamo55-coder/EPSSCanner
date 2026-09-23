@@ -87,6 +87,26 @@ const SIZE_BUDGET = 96_000
 
 const utf8Bytes = (s: string): number => new TextEncoder().encode(s).length
 
+/** One `<tr>` holding the chart image, shared by the full and compact card —
+ *  a single point of truth for the markup so the two can't drift on it.
+ *  Omitted entirely when `chartUrl` is absent or null — never a broken
+ *  `<img>`.
+ *
+ *  The tag itself is the whole cost: ~240 bytes of HTML regardless of the
+ *  underlying PNG's size, because `src` points at the already-rendered file
+ *  in Storage rather than inlining it — the mail client fetches the image
+ *  separately when the email opens. That is why this can sit in the compact
+ *  card too without touching the size budget the Fib ladder and gap table
+ *  actually compete for; see compactCardV2's own doc comment. */
+function chartImgRow(chartUrl: string | null | undefined, symbol: string, tdStyle: string): string {
+  if (!chartUrl) return ''
+  return `<tr>
+      <td style="${tdStyle}">
+        <img src="${escapeHtml(chartUrl)}" width="564" alt="${escapeHtml(symbol)} 126-day price chart" style="display:block;width:100%;max-width:564px;height:auto;border:0;border-radius:8px;">
+      </td>
+    </tr>`
+}
+
 /** The same technical readings as the full card, on one dense line.
  *
  *  Used ONLY for picks that would otherwise push the email past Gmail's
@@ -96,8 +116,11 @@ const utf8Bytes = (s: string): number => new TextEncoder().encode(s).length
  *
  *  It deliberately keeps every number a reader acts on — score, price,
  *  distance from the 150-day average, channel position, retracement,
- *  drawdown — and drops only the Fib ladder and gap table, which are the
- *  expensive part of the markup and the part a link can carry. */
+ *  drawdown — and now the chart too. It drops only the Fib ladder and gap
+ *  table: those are real HTML weight (a row of markup per level/gap); the
+ *  chart is a single ~240-byte `<img>` tag pointing at an already-rendered
+ *  file, so unlike the ladder it was never actually competing for the size
+ *  budget — see chartImgRow's own doc comment. */
 function compactCardV2(p: DigestPick, rank: number, siteUrl: string): string {
   const positionPct = 'positionPct' in p ? p.positionPct : null
   const retracement = 'retracement' in p ? p.retracement : null
@@ -115,8 +138,10 @@ function compactCardV2(p: DigestPick, rank: number, siteUrl: string): string {
 <span style="font:700 13px ${FONT};color:${PALETTE.ink};">${rank}. ${escapeHtml(p.symbol)}</span>
 <span style="font:400 12px ${FONT};color:${PALETTE.muted};"> &nbsp;${escapeHtml(num(p.score, 0))}/100 &nbsp;·&nbsp; ${escapeHtml(usd(p.price))}</span>
 <div style="font:400 11px ${FONT};color:${PALETTE.body};padding-top:4px;">${escapeHtml(bits.join(' · '))}</div>
-<a href="${escapeHtml(href)}" style="font:700 11px ${FONT};color:${PALETTE.brand};text-decoration:none;">Full levels and chart &rarr;</a>
-</td></tr></table>
+<a href="${escapeHtml(href)}" style="font:700 11px ${FONT};color:${PALETTE.brand};text-decoration:none;">Full levels →</a>
+</td></tr>
+${chartImgRow(p.chartUrl, p.symbol, 'padding:0 14px 10px 14px;')}
+</table>
 </td></tr>`
 }
 
@@ -161,14 +186,7 @@ function cardV2(p: DigestPick, rank: number, siteUrl: string, commentary: Commen
   // absent or null — never a broken <img>. The technical-levels panel below
   // (which embeds v1's own `bar`/`goldenBand`) always renders regardless, so
   // a pick with no chart still gets the full v1 bar treatment, not a hole.
-  const chartRow = p.chartUrl
-    ? `
-    <tr>
-      <td style="padding:0 18px 12px 18px;">
-        <img src="${escapeHtml(p.chartUrl)}" width="564" alt="${escapeHtml(p.symbol)} 126-day price chart" style="display:block;width:100%;max-width:564px;height:auto;border:0;border-radius:8px;">
-      </td>
-    </tr>`
-    : ''
+  const chartRow = chartImgRow(p.chartUrl, p.symbol, 'padding:0 18px 12px 18px;')
 
   const blocks: readonly [MetricBlock, MetricBlock, MetricBlock, MetricBlock] = [
     {
