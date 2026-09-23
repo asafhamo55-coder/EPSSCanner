@@ -56,6 +56,7 @@ import { renderDigest, type DigestData, type DigestSelection } from '../src/lib/
 import { renderDigestV2 } from '../src/lib/email/render-v2'
 import type { PrepPickRecord } from '../src/lib/digest'
 import { PALETTE } from '../src/lib/email/primitives'
+import { newsPanel } from '../src/lib/email/primitives-v2'
 import {
   deriveLevels,
   evaluate,
@@ -1051,6 +1052,7 @@ async function main() {
   const rendererPrepFresh: PrepPickRecord = {
     ...toDigestPickRecord(rendererFreshFlagPick),
     chartUrl: 'https://example.com/chart/FRESH.png',
+    news: null,
   }
   eq(
     rendererPrepFresh.reasons.length > 0 && rendererPrepFresh.yoyState === 'flag',
@@ -1738,6 +1740,77 @@ async function main() {
     utf8(compacted) < utf8(sample),
     true,
     'compaction: the output is actually smaller',
+  )
+
+  // ── News panel — real, attributed items only, never a placeholder ─
+  console.log('\nNews panel')
+  eq(newsPanel([]), '', 'newsPanel: no items renders nothing, not a placeholder')
+
+  const shortSnippet = 'Shares rose after the earnings call.'
+  const shortHtml = newsPanel([
+    { title: 'Short one', snippet: shortSnippet, publisher: 'Wire Co', url: 'https://example.com/a' },
+  ])
+  eq(
+    shortHtml.includes(shortSnippet),
+    true,
+    'newsPanel: a snippet under the truncation limit appears in full, untruncated',
+  )
+
+  const longSnippet =
+    'This is a very long news excerpt intended to exceed the one hundred and forty character truncation limit so the panel is forced to cut it down to size for display purposes in the email.'
+  const longHtml = newsPanel([
+    { title: 'Long one', snippet: longSnippet, publisher: 'Wire Co', url: 'https://example.com/b' },
+  ])
+  eq(longHtml.includes(longSnippet), false, 'newsPanel: an over-limit snippet is NOT present in full')
+  eq(/…\s*<\/span>/.test(longHtml), true, 'newsPanel: an over-limit snippet is truncated with a trailing ellipsis')
+
+  // Word-boundary truncation: "apple " is a 6-char token, and 140 is not a
+  // multiple of 6 (140 / 6 = 23.33), so a naive slice(0, 140) lands inside
+  // the 24th "apple" — a char-based cut would emit "...apple ap…"; the
+  // word-boundary-aware cut must back up to the space instead, so the result
+  // never shows a partial "apple" immediately before the ellipsis.
+  const wordSnippet = 'apple '.repeat(30).trim()
+  const wordHtml = newsPanel([
+    { title: 'Word boundary', snippet: wordSnippet, publisher: 'Wire Co', url: 'https://example.com/c' },
+  ])
+  eq(
+    /\bap…|\bappl…|\bapp…/.test(wordHtml),
+    false,
+    'newsPanel: truncation lands on a word boundary, never mid-word',
+  )
+  eq(wordHtml.includes('apple…'), true, 'newsPanel: truncation backs up to the last WHOLE word before the cut')
+
+  const attributionHtml = newsPanel([
+    {
+      title: 'NVDA hits a new milestone',
+      snippet: 'Analysts weigh in on the move.',
+      publisher: 'InvestorPlace',
+      url: 'https://investorplace.com/example',
+    },
+  ])
+  eq(attributionHtml.includes('NVDA hits a new milestone'), true, 'newsPanel: title is present')
+  eq(attributionHtml.includes('Analysts weigh in on the move.'), true, 'newsPanel: snippet is present')
+  eq(attributionHtml.includes('InvestorPlace'), true, 'newsPanel: publisher is present')
+  eq(attributionHtml.includes('https://investorplace.com/example'), true, 'newsPanel: url is present')
+
+  const twoItemsHtml = newsPanel([
+    { title: 'First', snippet: 'a', publisher: 'A Wire', url: 'https://example.com/1' },
+    { title: 'Second', snippet: 'b', publisher: 'B Wire', url: 'https://example.com/2' },
+  ])
+  eq(
+    (twoItemsHtml.match(/<a href=/g) || []).length,
+    2,
+    'newsPanel: two items produce two <a href= occurrences, not just the first',
+  )
+
+  const unsafeHtml = newsPanel([
+    { title: 'Q&A: "Buy or sell?"', snippet: 'n/a', publisher: 'Wire Co', url: 'https://example.com/d' },
+  ])
+  eq(unsafeHtml.includes('Q&A: "Buy or sell?"'), false, 'newsPanel: raw & and " in a title do not appear unescaped')
+  eq(
+    unsafeHtml.includes('Q&amp;A: &quot;Buy or sell?&quot;'),
+    true,
+    'newsPanel: & and " are escaped to &amp; and &quot;',
   )
 
   // ── Derivations: momentum, range, surprise ───────────────────────

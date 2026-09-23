@@ -355,6 +355,34 @@ The read describes what the data shows and never recommends action. The
 app's existing disclaimer — *Fundamental signals only — not investment
 advice* — stays prominent in v2.
 
+### In the news
+
+Each full-detail pick card carries up to 3 real, attributed news
+headlines — title, a short excerpt, the outlet's name, a link back to the
+original. Every field is exactly what the provider returned: nothing here
+is generated, paraphrased, or extracted by an LLM. That constraint exists
+for the same reason the market read above stopped being an
+`claude-opus-5` call — generated prose about a real stock carries a
+fabrication risk that raw provider data does not, and this feature was
+designed from the start to never reintroduce that risk under a different
+name.
+
+The source is FMP's `/stable/news/stock` endpoint, fetched only for the
+picks actually being emailed that morning — at most `MAX_PICKS`, never the
+whole watchlist — during the same preparation phase that renders charts,
+inside `prepareDigest`'s existing budget. Yahoo and the mock provider have
+no equivalent and return `[]`. A pick with no available news simply shows
+no section at all — never a placeholder like "no news today" — the same
+degrade-not-fail rule the chart row and the market read already follow.
+It needs no new migration: `news` rides inside the existing `picks` jsonb
+column on `screener_digest_prep`, exactly as `chartUrl` already does.
+
+The panel is full-card-only, omitted from compact rows. A compact row
+exists specifically to protect Gmail's clipping limit on a rare
+10-qualifying-pick day, and up to three headlines with excerpts and
+attribution is real HTML weight — the same tier as the Fib ladder and gap
+table, not the ~240-byte chart `<img>` tag that both card sizes can afford.
+
 ### Tiered ingest: not every ticker earns the full refresh
 
 `ingestTicker` makes seven FMP requests per ticker (`/ratios-ttm`,

@@ -33,7 +33,7 @@ import type { Commentary } from '@/lib/market-read'
 import type { DigestData, DigestPick, DigestSelection, RenderedEmail } from './render'
 import { chip, escapeHtml, FONT, meter, PALETTE, shell, type ChipTone } from './primitives'
 import { compactHtml, FONT_STYLE_BLOCK } from './compact'
-import { commentaryPanel, indexStrip, metricsGrid, technicalLevels, type MetricBlock } from './primitives-v2'
+import { commentaryPanel, indexStrip, metricsGrid, newsPanel, technicalLevels, type MetricBlock } from './primitives-v2'
 
 // ─── Duplicated-from-v1 pure helpers (see file banner) ─────────────
 function chipTone(state: SignalState): ChipTone {
@@ -153,6 +153,7 @@ function cardV2(p: DigestPick, rank: number, siteUrl: string, commentary: Commen
   const reasons = 'reasons' in p && p.reasons ? p.reasons : []
   const positionPct = 'positionPct' in p ? p.positionPct : null
   const retracement = 'retracement' in p ? p.retracement : null
+  const newsItems = 'news' in p && p.news ? p.news : []
   // The persisted (prep) path reads `levels` straight off the record; the
   // in-memory fallback path (a freshly-scored ScoredPick, never persisted)
   // still has the full `input.technicals` live, so it derives the same shape
@@ -300,6 +301,11 @@ function cardV2(p: DigestPick, rank: number, siteUrl: string, commentary: Commen
     ${
       stockRead
         ? `<tr><td style="padding:0 18px 10px 18px;">${commentaryPanel({ heading: 'Read', text: stockRead, compact: true })}</td></tr>`
+        : ''
+    }
+    ${
+      newsItems.length > 0
+        ? `<tr><td style="padding:0 18px 10px 18px;">${newsPanel(newsItems)}</td></tr>`
         : ''
     }
     <tr>

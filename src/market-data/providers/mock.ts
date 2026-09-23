@@ -2,6 +2,7 @@ import type {
   AnnualRow,
   DataProvider,
   EpsRow,
+  NewsItem,
   ValuationSnapshot,
 } from '../provider'
 
@@ -151,5 +152,9 @@ export class MockProvider implements DataProvider {
   }
   async getAnnualFinancials(symbol: string, years: number): Promise<AnnualRow[]> {
     return lookup(symbol).annual.slice(-years)
+  }
+  /** No fixture news — mock mode has no equivalent, same as Yahoo. */
+  async getStockNews(): Promise<NewsItem[]> {
+    return []
   }
 }

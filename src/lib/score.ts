@@ -20,6 +20,7 @@
 import { pctFromAth, vsSma150Pct, type PriceRange } from './derive'
 import { retracementRatio, type Technicals } from './technicals'
 import type { SignalState } from './signals'
+import type { NewsItem } from '@/market-data/provider'
 
 // ─── Tuning block — every threshold in the model lives here ─────────
 /** Entry gate: mega caps only. Inclusive. */
@@ -170,6 +171,7 @@ export interface ScoredPick extends Evaluation {
   roiTtm?: number | null
   epsSurprisePct?: number | null
   chartUrl?: string | null
+  news?: NewsItem[] | null
   change1dPct?: number | null
   change1wPct?: number | null
   change1mPct?: number | null
@@ -588,6 +590,12 @@ export function toPick(e: Evaluation): ScoredPick {
     roiTtm: e.input.roiTtm,
     epsSurprisePct: e.input.epsSurprisePct,
     chartUrl: e.input.chartUrl,
+    // Unlike chartUrl, news is never carried on ScoreInput (see the field's
+    // own doc comment on ScoredPick) — it's a prep-time artifact attached by
+    // digest.ts's fetchNews, mutating a ScoredPick already produced by this
+    // function, exactly the way renderCharts mutates chartUrl onto one. A
+    // freshly evaluated pick simply has none yet.
+    news: null,
     change1dPct: e.input.change1dPct,
     change1wPct: e.input.change1wPct,
     change1mPct: e.input.change1mPct,

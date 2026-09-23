@@ -339,9 +339,52 @@ export function commentaryPanel(opts: { heading: string; text: string; compact?:
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:${PALETTE.infoSoft};border-radius:${radius};">
   <tr>
     <td style="padding:${pad};">
-      <span style="font:700 ${headingSize} ${FONT};color:${PALETTE.infoInk};text-transform:uppercase;letter-spacing:0.04em;">🤖 ${escapeHtml(opts.heading)}</span><br>
+      <span style="font:700 ${headingSize} ${FONT};color:${PALETTE.infoInk};text-transform:uppercase;letter-spacing:0.04em;">📊 ${escapeHtml(opts.heading)}</span><br>
       <span style="font:400 ${textSize} ${FONT};color:${PALETTE.body};line-height:1.6;">${escapeHtml(opts.text)}</span>
     </td>
   </tr>
+</table>`
+}
+
+// ─── News panel ─────────────────────────────────────────────────────
+const NEWS_SNIPPET_MAX_CHARS = 140
+
+/** Truncates a news snippet to a word boundary, never mid-word — a
+ *  provider excerpt cut at an arbitrary character looks broken in a way a
+ *  reader notices immediately, which undermines trust in content that is
+ *  explicitly meant to read as "exactly what a real outlet published". */
+function truncateSnippet(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text
+  const cut = text.slice(0, maxChars)
+  const lastSpace = cut.lastIndexOf(' ')
+  return `${(lastSpace > 0 ? cut.slice(0, lastSpace) : cut).trim()}…`
+}
+
+/** Up to 3 real, attributed news items — title, a short excerpt, the
+ *  outlet's name, a link to the original. Every field is exactly what
+ *  src/market-data/provider.ts's NewsItem carries: nothing here is
+ *  generated, paraphrased, or extracted — see NewsItem's own doc comment
+ *  for why that's a hard constraint, not a style choice. Omitted entirely
+ *  (returns '') when there is nothing to show — never a placeholder like
+ *  "no news today", matching this template's degrade-not-fail rule
+ *  everywhere else (the chart row, the market-read panel). */
+export function newsPanel(items: Array<{ title: string; snippet: string; publisher: string; url: string }>): string {
+  if (items.length === 0) return ''
+  const rows = items
+    .map(
+      (item) => `
+    <tr><td style="padding:6px 0;border-top:1px solid ${PALETTE.line};">
+      <a href="${escapeHtml(item.url)}" style="font:700 12px ${FONT};color:${PALETTE.brand};text-decoration:none;">${escapeHtml(item.title)}</a><br>
+      ${item.snippet ? `<span style="font:400 12px ${FONT};color:${PALETTE.body};line-height:1.5;">${escapeHtml(truncateSnippet(item.snippet, NEWS_SNIPPET_MAX_CHARS))}</span><br>` : ''}
+      <span style="font:400 11px ${FONT};color:${PALETTE.muted};">— ${escapeHtml(item.publisher)}</span>
+    </td></tr>`,
+    )
+    .join('')
+  return `
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:${PALETTE.surface};border:1px solid ${PALETTE.line};border-radius:8px;">
+  <tr><td style="padding:10px 12px 4px 12px;font:700 11px ${FONT};color:${PALETTE.ink};">📰 In the news</td></tr>
+  <tr><td style="padding:0 12px 8px 12px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">${rows}</table>
+  </td></tr>
 </table>`
 }

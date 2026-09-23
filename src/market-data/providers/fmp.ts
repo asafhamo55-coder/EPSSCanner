@@ -2,6 +2,7 @@ import type {
   AnnualRow,
   DataProvider,
   EpsRow,
+  NewsItem,
   ValuationSnapshot,
 } from '../provider'
 import { ProviderError } from '../provider'
@@ -185,6 +186,15 @@ interface FmpIncome {
   netIncome?: number
 }
 
+interface FmpNewsItem {
+  publishedDate?: string
+  publisher?: string
+  title?: string
+  site?: string
+  text?: string
+  url?: string
+}
+
 export class FmpProvider implements DataProvider {
   async getProfile(symbol: string) {
     const rows = await get<FmpProfile[]>(symbol, '/profile')
@@ -308,6 +318,39 @@ export class FmpProvider implements DataProvider {
       operatingMarginTtm: toNum(r.operatingProfitMarginTTM),
       roiTtm: toNum(km.returnOnInvestedCapitalTTM),
       marketCap: toNum(q.marketCap),
+    }
+  }
+
+  /** Real, attributed news for `symbol` from FMP's `/news/stock` endpoint —
+   *  title, excerpt, publisher and link exactly as the provider returned
+   *  them, never generated or paraphrased (see NewsItem's own doc comment).
+   *  This endpoint takes `symbols` (plural) — passed here as an explicit
+   *  extra param — alongside the `symbol` (singular) `get()` already sets
+   *  unconditionally on every request; both present together is fine, FMP
+   *  ignores the one it doesn't use. Never throws: any failure — network,
+   *  rate limit, no coverage for this symbol — degrades to `[]`, matching
+   *  this method's own contract on DataProvider. */
+  async getStockNews(symbol: string, limit: number): Promise<NewsItem[]> {
+    try {
+      const rows = await get<FmpNewsItem[]>(symbol, '/news/stock', {
+        symbols: symbol,
+        limit: String(limit),
+      })
+      return rows
+        .filter((r) => r.title && r.url && r.publishedDate)
+        .map((r) => ({
+          title: r.title as string,
+          snippet: r.text ?? '',
+          publisher: r.publisher ?? r.site ?? 'Unknown source',
+          site: r.site ?? '',
+          url: r.url as string,
+          publishedAt: r.publishedDate as string,
+        }))
+        .sort((a, b) => b.publishedAt.localeCompare(a.publishedAt))
+        .slice(0, limit)
+    } catch (e) {
+      console.error(`[fmp] news fetch failed for ${symbol}: ${(e as Error).message}`)
+      return []
     }
   }
 

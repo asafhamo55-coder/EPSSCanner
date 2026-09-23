@@ -43,6 +43,28 @@ export interface AnnualRow {
   netIncome: number | null
 }
 
+/** One real, attributed news item about a stock — title, a short excerpt,
+ *  the publication's name, and a link back to the original. Nothing here is
+ *  generated, paraphrased, or extracted by an LLM: every field is exactly
+ *  what the news provider itself returned. That is a deliberate constraint,
+ *  not an oversight — see getStockNews's own doc comment for why. */
+export interface NewsItem {
+  title: string
+  /** The provider's own excerpt, UNTRUNCATED as stored — truncation for
+   *  display happens at render time (see the email template), so a future
+   *  consumer isn't stuck with whatever length this one template wanted. */
+  snippet: string
+  publisher: string
+  site: string
+  url: string
+  /** ISO-ish as the provider returns it; not reparsed into a Date here —
+   *  this codebase avoids `new Date()` off provider strings anywhere it can
+   *  get away with a plain string compare instead (see how FMP dates are
+   *  handled elsewhere in this file's sibling adapters), and string
+   *  comparison is all sorting by recency needs. */
+  publishedAt: string
+}
+
 /** One daily OHLC bar. `t` is a unix-seconds timestamp (Yahoo's native form). */
 export interface Bar {
   t: number
@@ -71,6 +93,12 @@ export interface DataProvider {
    *  that was exhausting the daily quota. */
   getValuationLight(symbol: string): Promise<ValuationSnapshot>
   getAnnualFinancials(symbol: string, years: number): Promise<AnnualRow[]>
+  /** Up to `limit` real news items for `symbol`, newest first. Returns an
+   *  empty array on ANY failure — no data, a provider error, no coverage —
+   *  never throws. This is cosmetic content for names ALREADY selected for
+   *  the email, not scoring input, so a failure here must never be treated
+   *  as seriously as a missing valuation field. */
+  getStockNews(symbol: string, limit: number): Promise<NewsItem[]>
 }
 
 /** Thrown for upstream failures so the ingest path can label the snapshot

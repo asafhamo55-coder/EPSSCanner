@@ -3,6 +3,7 @@ import type {
   Bar,
   DataProvider,
   EpsRow,
+  NewsItem,
   ValuationSnapshot,
 } from '../provider'
 import { ProviderError } from '../provider'
@@ -487,5 +488,11 @@ export class YahooProvider implements DataProvider {
       .filter((r) => r.fiscalYear > 0)
       .sort((a, b) => a.fiscalYear - b.fiscalYear)
       .slice(-years)
+  }
+
+  /** No news endpoint on this keyless adapter — degrades to no coverage
+   *  rather than a failure, same contract every provider gives this method. */
+  async getStockNews(): Promise<NewsItem[]> {
+    return []
   }
 }

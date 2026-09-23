@@ -19,6 +19,8 @@ import { renderChart } from './chart/render'
 import { pruneCharts, uploadChart } from './chart/store'
 import { buildMarketRead } from './market-read'
 import { getIndices, type IndexCardData } from '@/market-data/indices'
+import { getProvider } from '@/market-data'
+import type { NewsItem } from '@/market-data/provider'
 import { db } from './db'
 
 /** Trading-day lookbacks for the carried momentum fields — 1 day, 1 trading
@@ -250,6 +252,44 @@ async function renderCharts(prepOn: string, picks: ScoredPick[], deadline: numbe
   return rendered
 }
 
+/** How many news requests run in parallel. Modest — unlike chart rendering
+ *  this hits FMP's quota, and news is fetched only for the picks actually
+ *  being emailed (at most MAX_PICKS = 10), not the whole watchlist, so this
+ *  never approaches the volume the tiered ingest was built to protect
+ *  against. */
+const NEWS_CONCURRENCY = 3
+
+/** Up to this many news items are fetched and stored per pick. The email
+ *  template may show fewer (see NEWS_MAX_DISPLAY there) — this is the
+ *  fetch/storage ceiling, not the display ceiling, kept slightly generous
+ *  so a future template change doesn't need a new fetch. */
+const NEWS_FETCH_LIMIT = 5
+
+/** Fetches real news for each pick, mutating `news` onto it in place — same
+ *  shape as renderCharts just above: bounded concurrency, a shared deadline,
+ *  workers stop STARTING new fetches past it rather than being cut off
+ *  mid-flight. getStockNews on every provider already never throws (each
+ *  implementation's own contract), so nothing here needs its own top-level
+ *  try/catch the way renderChart's caller does. */
+async function fetchNews(picks: ScoredPick[], deadline: number): Promise<number> {
+  let fetched = 0
+  let next = 0
+  const provider = getProvider()
+  const worker = async () => {
+    for (let i = next++; i < picks.length; i = next++) {
+      if (Date.now() > deadline) return
+      const pick = picks[i]
+      const items = await provider.getStockNews(pick.symbol, NEWS_FETCH_LIMIT)
+      if (items.length > 0) {
+        pick.news = items
+        fetched++
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(NEWS_CONCURRENCY, picks.length) }, worker))
+  return fetched
+}
+
 /** Compact per-pick record persisted in screener_digest_prep.picks: the same
  *  audit projection the send ledger uses (toDigestPickRecord excludes
  *  input.technicals — ~27KB per pick — for exactly the same jsonb-column
@@ -258,6 +298,7 @@ async function renderCharts(prepOn: string, picks: ScoredPick[], deadline: numbe
  *  context but an artifact this phase produces, so it is added back here. */
 export interface PrepPickRecord extends DigestPickRecord {
   chartUrl: string | null
+  news: NewsItem[] | null
 }
 
 export interface PrepResult {
@@ -325,6 +366,11 @@ export async function prepareDigest(
     return 0
   })
 
+  const newsFetched = await fetchNews(selection.picks, deadline).catch((e) => {
+    console.error(`[prep] news fetch threw: ${(e as Error).message}`)
+    return 0
+  })
+
   // Budget left for the index fetch, with UPSERT_RESERVE_MS carved out so the
   // write below always has time to run — see PREP_BUDGET_MS/UPSERT_RESERVE_MS.
   // Can be small or negative if chart rendering ran long (a chart already in
@@ -382,6 +428,7 @@ export async function prepareDigest(
   const records: PrepPickRecord[] = selection.picks.map((p) => ({
     ...toDigestPickRecord(p),
     chartUrl: p.chartUrl ?? null,
+    news: p.news ?? null,
   }))
 
   try {
