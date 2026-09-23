@@ -1220,12 +1220,114 @@ async function main() {
     'renderDigestV2: a pick WITH a chartUrl does emit the chart <img> (control case for the assertion above)',
   )
 
+  // Same negative/positive pair for news: `rendererV2XssPick` above has no
+  // news set (toPick() always starts a fresh pick at news: null — see
+  // score.ts), so it's already the negative control. `news` isn't on
+  // ScoreInput (deliberately — see the field's own doc comment on
+  // ScoredPick), so it can't be set via mk()'s overrides the way chartUrl
+  // is; it's mutated onto the pick after toPick(), exactly the way
+  // digest.ts's fetchNews does it in production.
+  eq(
+    rendererV2XssHtml.includes('In the news'),
+    false,
+    'renderDigestV2: a pick with no news emits no "In the news" panel',
+  )
+  const rendererV2NewsPick = toPick(evaluate(mk('V2NEWS', {})))
+  rendererV2NewsPick.news = [
+    {
+      title: 'Real headline about V2NEWS',
+      snippet: 'A real excerpt from a real publisher.',
+      publisher: 'Real Wire',
+      site: 'realwire.com',
+      url: 'https://realwire.com/v2news',
+      publishedAt: '2026-01-01 09:00:00',
+    },
+  ]
+  const rendererV2NewsHtml = renderDigestV2({
+    recipient: { firstName: 'Test', unsubscribeToken: 'tok' },
+    selection: { picks: [rendererV2NewsPick], considered: 1, belowCutoff: 0 },
+    asOfLabel: 'Monday, 1 January 2026',
+    siteUrl: 'https://example.com',
+    indices: [],
+  }).html
+  eq(
+    rendererV2NewsHtml.includes('In the news'),
+    true,
+    'renderDigestV2: a pick WITH news does emit the "In the news" panel (control case for the assertion above)',
+  )
+  eq(
+    rendererV2NewsHtml.includes('Real headline about V2NEWS'),
+    true,
+    'renderDigestV2: the actual headline text reaches the final rendered HTML, not just a marker string',
+  )
+
+  // Compact rows (the adaptive size-budget demotion) must never show news —
+  // it is real HTML weight in exactly the way the chart <img> tag is not,
+  // and compact rows exist specifically to protect the size budget. Attach
+  // news AND a chart to every one of `capped`'s MAX_PICKS picks with
+  // realistic-length content, forcing at least the lowest-ranked pick past
+  // the adaptive loop's SIZE_BUDGET and into compactCardV2 — then confirm
+  // that demoted pick's own row carries no news, not just that SOME card
+  // somewhere lacks one (which could pass by accident on an under-filled
+  // page).
+  for (const p of capped.picks) {
+    p.chartUrl = `https://example.com/chart/${p.symbol}.png`
+    p.news = Array.from({ length: 3 }, (_, i) => ({
+      title: `${p.symbol} headline ${i}: a realistically long title about today's trading session`,
+      snippet:
+        `Shares of ${p.symbol} moved after a report from a real publisher discussed the quarter in detail. ` +
+        'Analysts weighed in with a range of views on the trajectory heading into the next print.',
+      publisher: `Wire ${i}`,
+      site: `wire${i}.example.com`,
+      url: `https://wire${i}.example.com/${p.symbol.toLowerCase()}`,
+      publishedAt: '2026-01-01 09:00:00',
+    }))
+  }
+  const rendererV2CappedNewsHtml = renderDigestV2({
+    recipient: { firstName: 'Test', unsubscribeToken: 'tok' },
+    selection: capped,
+    asOfLabel: 'Monday, 1 January 2026',
+    siteUrl: 'https://example.com',
+    indices: [],
+  }).html
+  const fullCardNewsCount = (rendererV2CappedNewsHtml.match(/In the news/g) || []).length
+  eq(
+    fullCardNewsCount > 0 && fullCardNewsCount < capped.picks.length,
+    true,
+    `renderDigestV2: with every pick carrying news, some full cards show it and demotion still excludes it from at least one (got ${fullCardNewsCount} of ${capped.picks.length})`,
+  )
+  eq(
+    rendererV2CappedNewsHtml.includes('Full levels →'),
+    true,
+    'renderDigestV2: confirms demotion genuinely happened (this text is compactCardV2-only) — the assertion above is not vacuously true',
+  )
+  const lastPick = capped.picks[capped.picks.length - 1]
+  // Anchor on 'Full levels' (compactCardV2's own unique marker text), not
+  // the pick's symbol — the preheader text near the TOP of the document
+  // lists every pick's symbol up front ("T00, T01, ... T09 — scored before
+  // the open"), so indexOf(symbol) matched THAT, not the card, and the
+  // slice below covered the entire document rather than the demoted pick's
+  // own section. Caught by this exact assertion failing during development.
+  const compactMarkerAt = rendererV2CappedNewsHtml.indexOf('Full levels')
+  const demotedSection = rendererV2CappedNewsHtml.slice(compactMarkerAt)
+  eq(
+    compactMarkerAt > 0 && demotedSection.includes(lastPick.symbol),
+    true,
+    'renderDigestV2: the compact row found belongs to the lowest-ranked pick, confirming demotion is bottom-up (sanity check for the assertion below)',
+  )
+  eq(
+    demotedSection.includes('In the news'),
+    false,
+    "renderDigestV2: the demoted pick's own compact-row section carries no news, even though it has real news data attached",
+  )
+
   // Same email-client constraints as v1: no inline SVG (Gmail strips it), no
   // flex/grid (neither Gmail nor Word-rendered Outlook can be trusted with
-  // it). Uses `capped` (MAX_PICKS worth of picks, defined above) plus real
-  // commentary so every block in cardV2 — metrics grid, technical levels,
-  // per-stock AI panel — actually renders and gets checked, not just an
-  // empty shell.
+  // it). Uses `capped` (MAX_PICKS worth of picks, defined above — by this
+  // point in the file also carrying chartUrl and news, mutated on by the
+  // compact-row test just above) plus real commentary so every block in
+  // cardV2 — metrics grid, technical levels, per-stock AI panel, chart,
+  // news — actually renders and gets checked, not just an empty shell.
   const rendererV2FullHtml = renderDigestV2({
     recipient: { firstName: 'Test', unsubscribeToken: 'tok' },
     selection: capped,
@@ -1744,58 +1846,104 @@ async function main() {
 
   // ── News panel — real, attributed items only, never a placeholder ─
   console.log('\nNews panel')
+  const NEWS_AT = '2026-09-22 17:00:00'
+  const newsItem = (over: Partial<{ title: string; snippet: string; publisher: string; url: string; publishedAt: string }>) => ({
+    title: 'Default title',
+    snippet: 'Default snippet.',
+    publisher: 'Wire Co',
+    url: 'https://example.com/x',
+    publishedAt: NEWS_AT,
+    ...over,
+  })
+
   eq(newsPanel([]), '', 'newsPanel: no items renders nothing, not a placeholder')
 
   const shortSnippet = 'Shares rose after the earnings call.'
-  const shortHtml = newsPanel([
-    { title: 'Short one', snippet: shortSnippet, publisher: 'Wire Co', url: 'https://example.com/a' },
-  ])
+  const shortHtml = newsPanel([newsItem({ title: 'Short one', snippet: shortSnippet })])
   eq(
     shortHtml.includes(shortSnippet),
     true,
     'newsPanel: a snippet under the truncation limit appears in full, untruncated',
   )
 
-  const longSnippet =
-    'This is a very long news excerpt intended to exceed the one hundred and forty character truncation limit so the panel is forced to cut it down to size for display purposes in the email.'
-  const longHtml = newsPanel([
-    { title: 'Long one', snippet: longSnippet, publisher: 'Wire Co', url: 'https://example.com/b' },
-  ])
-  eq(longHtml.includes(longSnippet), false, 'newsPanel: an over-limit snippet is NOT present in full')
-  eq(/…\s*<\/span>/.test(longHtml), true, 'newsPanel: an over-limit snippet is truncated with a trailing ellipsis')
-
-  // Word-boundary truncation: "apple " is a 6-char token, and 140 is not a
-  // multiple of 6 (140 / 6 = 23.33), so a naive slice(0, 140) lands inside
-  // the 24th "apple" — a char-based cut would emit "...apple ap…"; the
-  // word-boundary-aware cut must back up to the space instead, so the result
-  // never shows a partial "apple" immediately before the ellipsis.
-  const wordSnippet = 'apple '.repeat(30).trim()
-  const wordHtml = newsPanel([
-    { title: 'Word boundary', snippet: wordSnippet, publisher: 'Wire Co', url: 'https://example.com/c' },
-  ])
+  // Regression for the ORIGINAL truncation bug: a real excerpt shape where
+  // the sentence that reverses the article's apparent meaning starts right
+  // around the old 140-char word-boundary cutoff. A word-boundary-only cut
+  // landed mid-sentence and read as unambiguously bullish; a sentence-aware
+  // cut must either include the whole "not a buy" sentence or omit the
+  // snippet — it must never stop between "is" and "not".
+  const invertingSnippet =
+    'The momentum crowd is convinced the rally continues into earnings. Our analyst says the stock is not a buy at 60 times forward earnings given the deceleration already visible in the guide.'
+  const invertingHtml = newsPanel([newsItem({ snippet: invertingSnippet })])
   eq(
-    /\bap…|\bappl…|\bapp…/.test(wordHtml),
-    false,
-    'newsPanel: truncation lands on a word boundary, never mid-word',
+    invertingHtml.includes('the stock is not a buy'),
+    true,
+    'newsPanel: a multi-sentence excerpt keeps the sentence containing the actual verdict, not a fragment before it',
   )
-  eq(wordHtml.includes('apple…'), true, 'newsPanel: truncation backs up to the last WHOLE word before the cut')
+  eq(
+    /is\s*<\/span>/.test(invertingHtml) || /\bis…/.test(invertingHtml),
+    false,
+    'newsPanel: never stops between "is" and "not" — the exact inversion the original bug produced',
+  )
+
+  // No sentence boundary at all within the limit (one long run-on with no
+  // '.', '!' or '?') — the snippet must be omitted entirely, not cut at an
+  // arbitrary character that could land anywhere in the source's meaning.
+  const runOnSnippet = 'word '.repeat(80).trim()
+  const runOnHtml = newsPanel([newsItem({ title: 'Run-on', snippet: runOnSnippet })])
+  eq(
+    runOnHtml.includes('word word'),
+    false,
+    'newsPanel: a snippet with no sentence boundary in range is omitted, not character-truncated',
+  )
+  eq(
+    runOnHtml.includes('Run-on'),
+    true,
+    'newsPanel: the title and attribution still render even when the snippet is omitted',
+  )
+
+  // A snippet whose first sentence already exceeds the limit degrades the
+  // same way — no partial sentence is ever shown.
+  const longFirstSentence = `This single sentence runs on for well over two hundred and twenty characters without a single period, question mark or exclamation point anywhere in it to give the truncation logic a safe place to stop cutting at, so it should be dropped ${'x'.repeat(60)}.`
+  const longFirstHtml = newsPanel([newsItem({ title: 'No stop', snippet: longFirstSentence })])
+  eq(
+    longFirstHtml.includes('No stop'),
+    true,
+    'newsPanel: title still renders when the only sentence in the snippet is itself too long',
+  )
 
   const attributionHtml = newsPanel([
-    {
+    newsItem({
       title: 'NVDA hits a new milestone',
       snippet: 'Analysts weigh in on the move.',
       publisher: 'InvestorPlace',
       url: 'https://investorplace.com/example',
-    },
+      publishedAt: '2026-09-15 09:30:00',
+    }),
   ])
   eq(attributionHtml.includes('NVDA hits a new milestone'), true, 'newsPanel: title is present')
   eq(attributionHtml.includes('Analysts weigh in on the move.'), true, 'newsPanel: snippet is present')
   eq(attributionHtml.includes('InvestorPlace'), true, 'newsPanel: publisher is present')
   eq(attributionHtml.includes('https://investorplace.com/example'), true, 'newsPanel: url is present')
+  eq(
+    attributionHtml.includes('2026-09-15'),
+    true,
+    'newsPanel: the publish date is shown — a reader must be able to tell a headline isn\'t from today',
+  )
+  eq(
+    attributionHtml.includes('third-party publishers'),
+    true,
+    'newsPanel: the panel identifies itself as third-party content, not house commentary',
+  )
+  eq(
+    /color:#[0-9a-f]{6};text-decoration:underline/.test(attributionHtml),
+    true,
+    'newsPanel: the title link is styled neutrally (underlined ink), not brand-coloured like house copy',
+  )
 
   const twoItemsHtml = newsPanel([
-    { title: 'First', snippet: 'a', publisher: 'A Wire', url: 'https://example.com/1' },
-    { title: 'Second', snippet: 'b', publisher: 'B Wire', url: 'https://example.com/2' },
+    newsItem({ title: 'First', snippet: 'a', url: 'https://example.com/1' }),
+    newsItem({ title: 'Second', snippet: 'b', url: 'https://example.com/2' }),
   ])
   eq(
     (twoItemsHtml.match(/<a href=/g) || []).length,
@@ -1809,12 +1957,7 @@ async function main() {
   // to be enforced here, not assumed from how many the caller happened to
   // pass in.
   const fiveItemsHtml = newsPanel(
-    Array.from({ length: 5 }, (_, i) => ({
-      title: `Story ${i}`,
-      snippet: `Snippet ${i}`,
-      publisher: `Wire ${i}`,
-      url: `https://example.com/${i}`,
-    })),
+    Array.from({ length: 5 }, (_, i) => newsItem({ title: `Story ${i}`, url: `https://example.com/${i}` })),
   )
   eq(
     (fiveItemsHtml.match(/<a href=/g) || []).length,
@@ -1823,9 +1966,24 @@ async function main() {
   )
   eq(fiveItemsHtml.includes('Story 3'), false, 'newsPanel: the 4th item is genuinely absent, not just uncounted')
 
-  const unsafeHtml = newsPanel([
-    { title: 'Q&A: "Buy or sell?"', snippet: 'n/a', publisher: 'Wire Co', url: 'https://example.com/d' },
+  // The REAL guard against a fabricated "Unknown source" byline lives in
+  // fmp.ts's getStockNews — it filters out any row with neither a publisher
+  // nor a site before an item this shape can even reach newsPanel, and its
+  // map no longer has an 'Unknown source' fallback to fall back to. That
+  // function makes a live network call and isn't unit-tested here for the
+  // same reason renderChart isn't — this only confirms newsPanel itself
+  // doesn't independently reintroduce the same fallback string if it were
+  // ever handed an empty publisher by some other caller.
+  const noSourceHtml = newsPanel([
+    { title: 'Orphan story', snippet: 'n/a', publisher: '', url: 'https://example.com/orphan', publishedAt: NEWS_AT },
   ])
+  eq(
+    noSourceHtml.includes('Unknown source'),
+    false,
+    'newsPanel: does not itself fabricate an "Unknown source" byline (the real filter is in fmp.ts, untested here — see comment above)',
+  )
+
+  const unsafeHtml = newsPanel([newsItem({ title: 'Q&A: "Buy or sell?"', snippet: 'n/a' })])
   eq(unsafeHtml.includes('Q&A: "Buy or sell?"'), false, 'newsPanel: raw & and " in a title do not appear unescaped')
   eq(
     unsafeHtml.includes('Q&amp;A: &quot;Buy or sell?&quot;'),

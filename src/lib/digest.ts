@@ -265,6 +265,20 @@ const NEWS_CONCURRENCY = 3
  *  so a future template change doesn't need a new fetch. */
 const NEWS_FETCH_LIMIT = 5
 
+/** Same idiom as INDICES_MIN_MS just above, for the same reason: a news
+ *  request is a network call through FMP's `get()`, which retries a 429 up
+ *  to 3 times (500ms/1s/2s backoff, or up to 2s per Retry-After) before
+ *  giving up — worst case ~6s of sleep plus the request round-trips
+ *  themselves, well over a bare `Date.now() > deadline` check at the top of
+ *  the loop. Chart rendering has the identical last-iteration-overrun
+ *  property (see renderCharts' own comment on it); this is a second,
+ *  independent instance of the same shape, and the two now run
+ *  sequentially, so worst-case overrun compounds rather than being masked
+ *  by one already existing. Skipping outright below this much headroom
+ *  keeps that overrun from reaching the upsert's reserved slice of the
+ *  route's budget. */
+const NEWS_MIN_MS = 7_000
+
 /** Fetches real news for each pick, mutating `news` onto it in place — same
  *  shape as renderCharts just above: bounded concurrency, a shared deadline,
  *  workers stop STARTING new fetches past it rather than being cut off
@@ -277,7 +291,7 @@ async function fetchNews(picks: ScoredPick[], deadline: number): Promise<number>
   const provider = getProvider()
   const worker = async () => {
     for (let i = next++; i < picks.length; i = next++) {
-      if (Date.now() > deadline) return
+      if (Date.now() > deadline - NEWS_MIN_MS) return
       const pick = picks[i]
       const items = await provider.getStockNews(pick.symbol, NEWS_FETCH_LIMIT)
       if (items.length > 0) {

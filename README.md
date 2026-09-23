@@ -382,6 +382,35 @@ exists specifically to protect Gmail's clipping limit on a rare
 10-qualifying-pick day, and up to three headlines with excerpts and
 attribution is real HTML weight — the same tier as the Fib ladder and gap
 table, not the ~240-byte chart `<img>` tag that both card sizes can afford.
+Measured: five full cards each carrying a chart and a 3-item news panel
+land at 57% of Gmail's limit, up from 50% with no news.
+
+**Truncation never crosses a sentence.** An excerpt over 220 characters is
+cut at the last sentence-ending punctuation within the limit, never
+mid-clause — a word-boundary cut was tried first and rejected once it was
+shown to invert a real excerpt's meaning (a snippet ending "...sounds
+bullish until you read the cash flow statement..." cut mid-clause reads as
+unambiguously bullish). When no sentence boundary exists within the limit,
+the snippet is omitted entirely rather than guessed at; the title,
+attribution and link still render. An item with neither a publisher nor a
+site named by the provider is dropped outright — never labelled "Unknown
+source" under a verbatim excerpt. The panel names itself as third-party,
+non-endorsed content in its own header, and the footer disclaimer covers
+it explicitly.
+
+**Open, unresolved: FMP's redistribution terms for this specific endpoint
+have not been verified against the plan in use.** Everything else FMP-sourced
+in this email is numeric (P/E, margins, EPS growth) — factual data about a
+public company, not a copyrightable work, and squarely within the ordinary
+use of a market-data subscription. `/stable/news/stock`'s `text` field is
+different: verbatim editorial excerpts FMP itself licenses in from
+syndication partners. Redistributing that in a branded email to a
+subscriber list, and persisting it (no TTL, same open gap
+`CHART_RETENTION_DAYS` closes for chart PNGs but nothing closes here) is a
+materially different kind of use than redistributing numbers, and this
+codebase has never had a license/ToS reference for any provider to check it
+against. Confirm FMP's plan permits this before relying on it — whatever
+the answer, update this paragraph with it.
 
 ### Tiered ingest: not every ticker earns the full refresh
 

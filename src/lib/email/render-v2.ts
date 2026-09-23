@@ -111,16 +111,20 @@ function chartImgRow(chartUrl: string | null | undefined, symbol: string, tdStyl
  *
  *  Used ONLY for picks that would otherwise push the email past Gmail's
  *  clipping point — and only from the bottom of the ranking upward, so the
- *  highest-scoring names keep their full panels. On a typical day this never
- *  runs: five picks render full and land at 82% of the limit.
+ *  highest-scoring names keep their full panels. On a typical day this
+ *  still rarely runs: five full cards, each carrying a chart AND a 3-item
+ *  news panel, measured 58,254 bytes — 57% of the limit (up from 50% with
+ *  no news; the news panel itself is real weight, unlike the chart).
  *
  *  It deliberately keeps every number a reader acts on — score, price,
  *  distance from the 150-day average, channel position, retracement,
- *  drawdown — and now the chart too. It drops only the Fib ladder and gap
- *  table: those are real HTML weight (a row of markup per level/gap); the
- *  chart is a single ~240-byte `<img>` tag pointing at an already-rendered
- *  file, so unlike the ladder it was never actually competing for the size
- *  budget — see chartImgRow's own doc comment. */
+ *  drawdown — and the chart too. It drops the Fib ladder and gap table
+ *  (real HTML weight — a row of markup per level/gap) AND the news panel
+ *  (a title/excerpt/attribution block per item, the single largest
+ *  per-card addition since this comment was last measured). The chart
+ *  alone stays: a single ~240-byte `<img>` tag pointing at an
+ *  already-rendered file, so unlike the other two it was never actually
+ *  competing for the size budget — see chartImgRow's own doc comment. */
 function compactCardV2(p: DigestPick, rank: number, siteUrl: string): string {
   const positionPct = 'positionPct' in p ? p.positionPct : null
   const retracement = 'retracement' in p ? p.retracement : null

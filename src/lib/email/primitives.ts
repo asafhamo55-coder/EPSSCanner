@@ -287,7 +287,7 @@ export function shell(opts: {
         ${opts.bodyHtml}
         <tr>
           <td style="background:${PALETTE.surface};padding:20px 24px 8px 24px;font:400 11px ${FONT};color:${PALETTE.muted};line-height:1.6;">
-            Fundamental signals only — not investment advice.<br>
+            Fundamental signals and any included third-party news headlines — informational only, not investment advice. News items are reproduced from their original publishers and are not endorsed by TripleQ Group.<br>
             ${opts.footerLinksHtml}
           </td>
         </tr>

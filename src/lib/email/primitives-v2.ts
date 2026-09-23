@@ -347,7 +347,7 @@ export function commentaryPanel(opts: { heading: string; text: string; compact?:
 }
 
 // ─── News panel ─────────────────────────────────────────────────────
-const NEWS_SNIPPET_MAX_CHARS = 140
+const NEWS_SNIPPET_MAX_CHARS = 220
 
 /** Display ceiling, enforced HERE rather than trusted from the caller.
  *
@@ -364,41 +364,79 @@ const NEWS_SNIPPET_MAX_CHARS = 140
  *  remember. */
 const NEWS_MAX_DISPLAY = 3
 
-/** Truncates a news snippet to a word boundary, never mid-word — a
- *  provider excerpt cut at an arbitrary character looks broken in a way a
- *  reader notices immediately, which undermines trust in content that is
- *  explicitly meant to read as "exactly what a real outlet published". */
-function truncateSnippet(text: string, maxChars: number): string {
+/** Truncates a news snippet at a SENTENCE boundary, never mid-clause — and
+ *  returns null (meaning: don't show a snippet at all) when no safe
+ *  boundary exists within the limit.
+ *
+ *  A word-boundary cut was tried first and was wrong in a way that matters
+ *  here specifically: a real excerpt like "...raised guidance, which sounds
+ *  bullish until you read the cash flow statement, where free cash flow
+ *  fell 40%." cut at a word boundary near the limit renders as "...sounds
+ *  bullish until you…" — grammatically clean, and reads as the OPPOSITE of
+ *  what the source actually said. This sits inside a card recommending the
+ *  stock; "exactly what the provider returned" is the entire premise of
+ *  this feature, and a truncation that inverts the source's point is the
+ *  one place that premise silently stopped being true. No heuristic can
+ *  reliably detect a clause turning on a word like "but" or "despite", so
+ *  this doesn't try — it only ever cuts where a sentence genuinely ends,
+ *  and omits the snippet rather than guess when nothing in the limit does. */
+function truncateSnippet(text: string, maxChars: number): string | null {
   if (text.length <= maxChars) return text
   const cut = text.slice(0, maxChars)
-  const lastSpace = cut.lastIndexOf(' ')
-  return `${(lastSpace > 0 ? cut.slice(0, lastSpace) : cut).trim()}…`
+  let end = -1
+  for (const stop of ['. ', '! ', '? ']) {
+    end = Math.max(end, cut.lastIndexOf(stop))
+  }
+  if (/[.!?]$/.test(cut)) end = Math.max(end, cut.length - 1)
+  return end > 0 ? cut.slice(0, end + 1).trim() : null
+}
+
+/** `publishedAt` as stored is FMP's own `'YYYY-MM-DD HH:MM:SS'` — the date
+ *  portion is unambiguous and needs no Date parsing (this codebase avoids
+ *  `new Date()` off provider strings wherever a plain slice/compare works
+ *  instead). Shown so a reader can tell a headline is from today versus
+ *  three weeks ago — the item is still the most recent one FMP has for a
+ *  thin-coverage name, but omitting the date let it silently read as
+ *  today's news whether or not it was. */
+function newsDateLabel(publishedAt: string): string {
+  return publishedAt.slice(0, 10)
 }
 
 /** Up to 3 real, attributed news items — title, a short excerpt, the
- *  outlet's name, a link to the original. Every field is exactly what
- *  src/market-data/provider.ts's NewsItem carries: nothing here is
+ *  outlet's name and date, a link to the original. Every field is exactly
+ *  what src/market-data/provider.ts's NewsItem carries: nothing here is
  *  generated, paraphrased, or extracted — see NewsItem's own doc comment
  *  for why that's a hard constraint, not a style choice. Omitted entirely
  *  (returns '') when there is nothing to show — never a placeholder like
  *  "no news today", matching this template's degrade-not-fail rule
- *  everywhere else (the chart row, the market-read panel). */
-export function newsPanel(items: Array<{ title: string; snippet: string; publisher: string; url: string }>): string {
+ *  everywhere else (the chart row, the market-read panel).
+ *
+ *  Deliberately styled to NOT look like TripleQ's own commentary: the title
+ *  is ink, not brand indigo, and the header names the items as third-party.
+ *  This panel sits between TripleQ's own "Read" panel and its own reason
+ *  sentence — without that distinction a promotional headline like "3
+ *  Reasons to Buy" (a genuinely common shape for this kind of feed) would
+ *  read as house copy rather than a linked, unendorsed external article. */
+export function newsPanel(
+  items: Array<{ title: string; snippet: string; publisher: string; url: string; publishedAt: string }>,
+): string {
   if (items.length === 0) return ''
   const rows = items
     .slice(0, NEWS_MAX_DISPLAY)
-    .map(
-      (item) => `
+    .map((item) => {
+      const snippet = item.snippet ? truncateSnippet(item.snippet, NEWS_SNIPPET_MAX_CHARS) : null
+      return `
     <tr><td style="padding:6px 0;border-top:1px solid ${PALETTE.line};">
-      <a href="${escapeHtml(item.url)}" style="font:700 12px ${FONT};color:${PALETTE.brand};text-decoration:none;">${escapeHtml(item.title)}</a><br>
-      ${item.snippet ? `<span style="font:400 12px ${FONT};color:${PALETTE.body};line-height:1.5;">${escapeHtml(truncateSnippet(item.snippet, NEWS_SNIPPET_MAX_CHARS))}</span><br>` : ''}
-      <span style="font:400 11px ${FONT};color:${PALETTE.muted};">— ${escapeHtml(item.publisher)}</span>
-    </td></tr>`,
-    )
+      <a href="${escapeHtml(item.url)}" style="font:700 12px ${FONT};color:${PALETTE.ink};text-decoration:underline;">${escapeHtml(item.title)}</a><br>
+      ${snippet ? `<span style="font:400 12px ${FONT};color:${PALETTE.body};line-height:1.5;">${escapeHtml(snippet)}</span><br>` : ''}
+      <span style="font:400 11px ${FONT};color:${PALETTE.muted};">— ${escapeHtml(item.publisher)} · ${escapeHtml(newsDateLabel(item.publishedAt))}</span>
+    </td></tr>`
+    })
     .join('')
   return `
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:${PALETTE.surface};border:1px solid ${PALETTE.line};border-radius:8px;">
-  <tr><td style="padding:10px 12px 4px 12px;font:700 11px ${FONT};color:${PALETTE.ink};">📰 In the news</td></tr>
+  <tr><td style="padding:10px 12px 0 12px;font:700 11px ${FONT};color:${PALETTE.ink};">📰 In the news</td></tr>
+  <tr><td style="padding:0 12px 4px 12px;font:400 10px ${FONT};color:${PALETTE.muted};">From third-party publishers — not TripleQ, not an endorsement</td></tr>
   <tr><td style="padding:0 12px 8px 12px;">
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">${rows}</table>
   </td></tr>

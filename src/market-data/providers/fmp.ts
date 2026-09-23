@@ -336,12 +336,34 @@ export class FmpProvider implements DataProvider {
         symbols: symbol,
         limit: String(limit),
       })
+      // The url check is more than truthiness: escapeHtml at render time
+      // fully prevents attribute breakout (it escapes the quote that would
+      // close the href="..." attribute), but it does nothing about SCHEME —
+      // an href="javascript:..." with no quote or angle bracket in it passes
+      // through untouched. Every mail client that matters strips non-http(s)
+      // hrefs during sanitization, so this was never exploitable in the
+      // actual delivery medium, but requiring http(s) here is free and also
+      // discards a relative path (e.g. '/article/1'), which would otherwise
+      // render as a dead link resolving against the mail client's own origin.
+      //
+      // Also requires SOME attribution (publisher or site) — this used to
+      // fall back to a literal "Unknown source" byline under a real,
+      // verbatim article excerpt, which is worse than showing nothing: an
+      // excerpt this feature's whole premise is "attributed" cannot ship
+      // unattributed. An item FMP itself can't name a source for is dropped
+      // rather than mislabeled.
       return rows
-        .filter((r) => r.title && r.url && r.publishedDate)
+        .filter(
+          (r) =>
+            r.title &&
+            r.publishedDate &&
+            /^https?:\/\//i.test(r.url ?? '') &&
+            (r.publisher || r.site),
+        )
         .map((r) => ({
           title: r.title as string,
           snippet: r.text ?? '',
-          publisher: r.publisher ?? r.site ?? 'Unknown source',
+          publisher: (r.publisher || r.site) as string,
           site: r.site ?? '',
           url: r.url as string,
           publishedAt: r.publishedDate as string,
