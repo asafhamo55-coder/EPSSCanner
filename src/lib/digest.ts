@@ -366,7 +366,11 @@ export async function prepareDigest(
     return 0
   })
 
-  const newsFetched = await fetchNews(selection.picks, deadline).catch((e) => {
+  // Not tracked in PrepResult or logged on success — unlike chartsRendered,
+  // nothing downstream needs this count today. Deliberately not bound to a
+  // variable either: an unused `const` here is dead weight, not a metric
+  // anyone reads.
+  await fetchNews(selection.picks, deadline).catch((e) => {
     console.error(`[prep] news fetch threw: ${(e as Error).message}`)
     return 0
   })

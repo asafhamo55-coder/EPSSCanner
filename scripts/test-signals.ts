@@ -1803,6 +1803,26 @@ async function main() {
     'newsPanel: two items produce two <a href= occurrences, not just the first',
   )
 
+  // Regression: digest.ts fetches and stores up to 5 items per pick
+  // (NEWS_FETCH_LIMIT), deliberately more than the display intends to show,
+  // so a stored 5-item array must still render only 3 — the display cap has
+  // to be enforced here, not assumed from how many the caller happened to
+  // pass in.
+  const fiveItemsHtml = newsPanel(
+    Array.from({ length: 5 }, (_, i) => ({
+      title: `Story ${i}`,
+      snippet: `Snippet ${i}`,
+      publisher: `Wire ${i}`,
+      url: `https://example.com/${i}`,
+    })),
+  )
+  eq(
+    (fiveItemsHtml.match(/<a href=/g) || []).length,
+    3,
+    'newsPanel: 5 stored items still render only 3 — the display cap is enforced here, not just fetch-time',
+  )
+  eq(fiveItemsHtml.includes('Story 3'), false, 'newsPanel: the 4th item is genuinely absent, not just uncounted')
+
   const unsafeHtml = newsPanel([
     { title: 'Q&A: "Buy or sell?"', snippet: 'n/a', publisher: 'Wire Co', url: 'https://example.com/d' },
   ])

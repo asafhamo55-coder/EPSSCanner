@@ -349,6 +349,21 @@ export function commentaryPanel(opts: { heading: string; text: string; compact?:
 // ─── News panel ─────────────────────────────────────────────────────
 const NEWS_SNIPPET_MAX_CHARS = 140
 
+/** Display ceiling, enforced HERE rather than trusted from the caller.
+ *
+ *  digest.ts fetches and stores up to NEWS_FETCH_LIMIT (5) items per pick —
+ *  deliberately more than this, so a future template change has real items
+ *  to draw from without a new fetch. Nothing capped the DISPLAY side to
+ *  match: cardV2 passed the stored array straight through, so a pick with
+ *  5 stored items rendered all 5, not the "up to 3" this panel's own
+ *  earlier doc comment already claimed. Capping at the point that actually
+ *  renders is the same reasoning src/lib/score.ts's gap table already
+ *  follows ("already capped at 3 by deriveLevels — a name with a dozen
+ *  unfilled gaps should not produce a dozen email rows") — the boundary
+ *  that emits HTML is where a limit belongs, not left to every caller to
+ *  remember. */
+const NEWS_MAX_DISPLAY = 3
+
 /** Truncates a news snippet to a word boundary, never mid-word — a
  *  provider excerpt cut at an arbitrary character looks broken in a way a
  *  reader notices immediately, which undermines trust in content that is
@@ -371,6 +386,7 @@ function truncateSnippet(text: string, maxChars: number): string {
 export function newsPanel(items: Array<{ title: string; snippet: string; publisher: string; url: string }>): string {
   if (items.length === 0) return ''
   const rows = items
+    .slice(0, NEWS_MAX_DISPLAY)
     .map(
       (item) => `
     <tr><td style="padding:6px 0;border-top:1px solid ${PALETTE.line};">
